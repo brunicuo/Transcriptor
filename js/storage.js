@@ -7,6 +7,7 @@ const MAX_HISTORIAL = 50;
 const AJUSTES_INICIALES = {
   motor: 'local',
   modelo: 'base',
+  aceleracion: 'auto', // 'auto' usa la placa de video si funciona; 'wasm' solo el procesador
   idioma: 'spanish',
   clientId: '',
   carpetas: [], // [{ id, nombre, link, carpetaId }]

@@ -15,7 +15,8 @@
 //   disponible(): Promise<boolean>
 //     ¿Se puede usar en este dispositivo / con esta configuración?
 //
-//   preparar({ modelo, onProgreso }): Promise<void>
+//   preparar({ modelo, aceleracion, onProgreso }): Promise<void>
+//     aceleracion: 'auto' (usa la placa de video si puede) o 'wasm' (solo procesador).
 //     Deja el motor listo (descarga y carga el modelo, se conecta, etc.).
 //     onProgreso({ etapa: 'descarga', fraccion: 0..1, detalle }) es opcional.
 //
@@ -24,6 +25,7 @@
 //     idioma: nombre en inglés que entiende Whisper ('spanish') o null para detectar solo.
 //     onProgreso({ etapa: 'transcripcion', fraccion: 0..1 })
 //     onParcial(textoHastaAhora) para ir mostrando el resultado.
+//     onFallaGPU() avisa que la placa de video falló y se siguió con el procesador.
 //     signal: AbortSignal para cancelar.
 //
 //   info(): object (opcional) datos para mostrar, por ejemplo la aceleración usada.

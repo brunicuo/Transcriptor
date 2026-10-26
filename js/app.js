@@ -130,6 +130,7 @@ async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, m
     progreso(etapaModelo, null);
     await motor.preparar({
       modelo: ajustes.modelo,
+      aceleracion: ajustes.aceleracion,
       onProgreso: ({ fraccion, cargado, total }) =>
         progreso(etapaModelo, fraccion, total ? `${formatearTamano(cargado)} de ${formatearTamano(total)}` : ''),
     });
@@ -143,6 +144,10 @@ async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, m
         idioma: ajustes.idioma || null,
         signal: controlador.signal,
         onProgreso: ({ fraccion }) => progreso('Transcribiendo', fraccion, notaAudio),
+        onFallaGPU: () => {
+          ajustes = guardarAjustes({ aceleracion: 'wasm' });
+          avisar('La placa de video falló. Sigo con el procesador (más lento) y lo recuerdo para la próxima.', 6000);
+        },
         onParcial: (texto) => {
           if (mostrar) $('texto-resultado').value = texto;
         },
@@ -206,15 +211,26 @@ function mostrarResultado(entrada) {
   $('boton-otro').hidden = false;
 }
 
+function mensajeAmigable(error) {
+  const mensaje = error?.message || String(error);
+  if (/OrtRun|WebGPU|GPUBuffer|device.*lost|onnxruntime/i.test(mensaje)) {
+    return 'El motor de transcripción falló en este dispositivo. Probá de nuevo; si se repite, en Ajustes elegí "Aceleración: solo procesador".';
+  }
+  if (/memory|memoria|allocation/i.test(mensaje)) {
+    return 'El dispositivo se quedó sin memoria. Probá con el modelo Rápido o cerrá otras apps.';
+  }
+  return mensaje.length > 220 ? `${mensaje.slice(0, 220)}…` : mensaje;
+}
+
 function mostrarError(error) {
   if (error?.name === 'AbortError') {
     avisar('Transcripción cancelada.');
   } else {
     console.error(error);
-    avisar(error?.message || 'Algo salió mal.', 6000);
+    avisar(mensajeAmigable(error), 6000);
   }
   if (!actual) {
-    $('trabajo-detalle').textContent = error?.name === 'AbortError' ? 'Cancelada.' : `No se pudo transcribir: ${error?.message || error}`;
+    $('trabajo-detalle').textContent = error?.name === 'AbortError' ? 'Cancelada.' : `No se pudo transcribir. ${mensajeAmigable(error)}`;
     $('boton-otro').hidden = false;
   }
 }
@@ -607,6 +623,7 @@ function pintarAjustes() {
     .join('');
   $('ajuste-motor').value = obtenerMotor(ajustes.motor).id;
   $('ajuste-idioma').value = ajustes.idioma;
+  $('ajuste-aceleracion').value = ajustes.aceleracion;
   $('ajuste-client-id').value = ajustes.clientId;
   pintarModelos();
   pintarInfoDispositivo();
@@ -735,6 +752,10 @@ $('ajuste-motor').addEventListener('change', (evento) => {
 
 $('opciones-modelo').addEventListener('change', (evento) => {
   if (evento.target.name === 'modelo') ajustes = guardarAjustes({ modelo: evento.target.value });
+});
+
+$('ajuste-aceleracion').addEventListener('change', (evento) => {
+  ajustes = guardarAjustes({ aceleracion: evento.target.value });
 });
 
 $('ajuste-idioma').addEventListener('change', (evento) => {

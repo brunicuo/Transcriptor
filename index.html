@@ -184,6 +184,13 @@
           <div id="opciones-modelo"></div>
         </fieldset>
 
+        <label for="ajuste-aceleracion" class="etiqueta">Aceleración</label>
+        <select id="ajuste-aceleracion" class="campo">
+          <option value="auto">Automática (usa la placa de video si funciona)</option>
+          <option value="wasm">Solo procesador (más lento, más compatible)</option>
+        </select>
+        <p class="suave chico">Si la placa de video falla, la app pasa sola a "Solo procesador". La primera vez en ese modo descarga otra versión del modelo.</p>
+
         <label for="ajuste-idioma" class="etiqueta">Idioma de los audios</label>
         <select id="ajuste-idioma" class="campo">
           <option value="spanish">Español</option>

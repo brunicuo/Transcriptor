@@ -156,7 +156,7 @@ main { max-width: 720px; margin: 0 auto; padding: 0 16px 24px; }
 .progreso .boton-texto { margin-top: 4px; padding-left: 0; }
 
 /* Resultado */
-.nombre-archivo { word-break: break-word; }
+.nombre-archivo, #trabajo-detalle { overflow-wrap: anywhere; }
 .resultado {
   width: 100%; min-height: 40vh; margin-top: 12px; padding: 16px;
   font: inherit; line-height: 1.6; color: var(--texto);

@@ -19,8 +19,9 @@ async function adaptadorWebGPU() {
   }
 }
 
-async function cargar({ id, modelo, repo }) {
-  if (transcriptor && modeloActual === modelo) {
+async function cargar({ id, modelo, repo, aceleracion = 'auto' }) {
+  const clave = `${modelo}|${aceleracion}`;
+  if (transcriptor && modeloActual === clave) {
     postMessage({ id, tipo: 'listo', dispositivo: dispositivoActual });
     return;
   }
@@ -35,7 +36,7 @@ async function cargar({ id, modelo, repo }) {
     }
   };
 
-  const adaptador = await adaptadorWebGPU();
+  const adaptador = aceleracion === 'wasm' ? null : await adaptadorWebGPU();
   if (adaptador) {
     try {
       // En WebGPU el codificador necesita buena precisión; el decodificador va comprimido (q4).
@@ -45,8 +46,11 @@ async function cargar({ id, modelo, repo }) {
         dtype: { encoder_model: precisionCodificador, decoder_model_merged: 'q4' },
         progress_callback,
       });
+      // Prueba corta: si la placa de video no aguanta, mejor enterarse ahora.
+      await transcriptor(new Float32Array(16000), { task: 'transcribe', language: 'spanish' });
       dispositivoActual = 'webgpu';
     } catch (error) {
+      // No llamamos a dispose(): con la placa colgada puede quedarse esperando para siempre.
       console.warn('WebGPU no funcionó, sigo con WebAssembly.', error);
       transcriptor = null;
     }
@@ -59,7 +63,7 @@ async function cargar({ id, modelo, repo }) {
     });
     dispositivoActual = 'wasm';
   }
-  modeloActual = modelo;
+  modeloActual = clave;
   postMessage({ id, tipo: 'listo', dispositivo: dispositivoActual });
 }
 

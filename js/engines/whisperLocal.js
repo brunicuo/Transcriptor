@@ -35,6 +35,7 @@ const pendientes = new Map();
 let modeloCargado = null;
 let cargando = null;
 let dispositivo = null;
+let ultimaPreparacion = null;
 
 function obtenerWorker() {
   if (!worker) {
@@ -68,15 +69,17 @@ function pedir(tipo, datos, { onProgreso, transferir = [] } = {}) {
   });
 }
 
-async function preparar({ modelo = 'base', onProgreso } = {}) {
+async function preparar({ modelo = 'base', aceleracion = 'auto', onProgreso } = {}) {
   const elegido = MODELOS[modelo] ? modelo : 'base';
-  if (modeloCargado === elegido) return;
+  const clave = `${elegido}|${aceleracion}`;
+  if (modeloCargado === clave) return;
   if (cargando) await cargando.catch(() => {});
-  if (modeloCargado === elegido) return;
+  if (modeloCargado === clave) return;
+  ultimaPreparacion = { modelo: elegido, aceleracion, onProgreso };
 
   // Sumamos el avance de todos los archivos del modelo para mostrar un solo porcentaje.
   const archivos = {};
-  cargando = pedir('cargar', { modelo: elegido, repo: MODELOS[elegido].repo }, {
+  cargando = pedir('cargar', { modelo: elegido, repo: MODELOS[elegido].repo, aceleracion }, {
     onProgreso: (dato) => {
       archivos[dato.archivo] = { cargado: dato.cargado || 0, total: dato.total || 0 };
       const lista = Object.values(archivos);
@@ -88,7 +91,7 @@ async function preparar({ modelo = 'base', onProgreso } = {}) {
   try {
     const respuesta = await cargando;
     dispositivo = respuesta.dispositivo;
-    modeloCargado = elegido;
+    modeloCargado = clave;
   } catch (error) {
     if (/fetch|network|load failed/i.test(error.message)) {
       throw new Error('No se pudo descargar el modelo. Revisá la conexión a internet y probá de nuevo.');
@@ -97,6 +100,15 @@ async function preparar({ modelo = 'base', onProgreso } = {}) {
   } finally {
     cargando = null;
   }
+}
+
+/** Descarta el worker (por ejemplo, si la placa de video se colgó) para empezar de cero. */
+function reiniciarWorker() {
+  worker?.terminate();
+  worker = null;
+  modeloCargado = null;
+  for (const pedido of pendientes.values()) pedido.reject(new Error('Se reinició el motor.'));
+  pendientes.clear();
 }
 
 function dividirAudio(muestras) {
@@ -136,7 +148,7 @@ function limpiar(texto) {
   return ALUCINACIONES.some((patron) => patron.test(t)) ? '' : t;
 }
 
-async function transcribir(audio, { idioma = 'spanish', onProgreso, onParcial, signal } = {}) {
+async function transcribir(audio, { idioma = 'spanish', onProgreso, onParcial, onFallaGPU, signal } = {}) {
   if (!modeloCargado) throw new Error('El modelo no está cargado.');
   const pedazos = dividirAudio(audio.muestras);
   const textos = [];
@@ -150,8 +162,21 @@ async function transcribir(audio, { idioma = 'spanish', onProgreso, onParcial, s
     const duracion = pedazo.length / FRECUENCIA;
     if (!esSilencio(pedazo)) {
       // Copiamos el pedazo porque se transfiere al worker.
-      const copia = pedazo.slice();
-      const { texto } = await pedir('transcribir', { audio: copia, idioma }, { transferir: [copia.buffer] });
+      let texto;
+      try {
+        const copia = pedazo.slice();
+        ({ texto } = await pedir('transcribir', { audio: copia, idioma }, { transferir: [copia.buffer] }));
+      } catch (error) {
+        if (dispositivo !== 'webgpu') throw error;
+        // La placa de video de algunos celulares se cuelga ("device lost"): seguimos con el
+        // procesador desde este mismo pedazo, sin perder lo ya transcripto.
+        console.warn('Falló WebGPU, sigo con WebAssembly.', error);
+        onFallaGPU?.();
+        reiniciarWorker();
+        await preparar({ ...ultimaPreparacion, aceleracion: 'wasm' });
+        const copia = pedazo.slice();
+        ({ texto } = await pedir('transcribir', { audio: copia, idioma }, { transferir: [copia.buffer] }));
+      }
       const limpio = limpiar(texto || '');
       if (limpio) {
         textos.push(limpio);
@@ -201,5 +226,5 @@ export const motorLocal = {
   transcribir,
   modelosDescargados,
   borrarModelos,
-  info: () => ({ dispositivo, modelo: modeloCargado }),
+  info: () => ({ dispositivo, modelo: modeloCargado?.split('|')[0] }),
 };

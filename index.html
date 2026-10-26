@@ -10,6 +10,7 @@
   <link rel="icon" href="icons/icono.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/app.css">
+  <script src="version.js"></script>
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
@@ -39,6 +40,11 @@
   </header>
 
   <main>
+    <div id="banner-actualizacion" class="banner-actualizacion" role="status" hidden>
+      <span id="texto-actualizacion">Hay una versión nueva.</span>
+      <button id="boton-actualizar" class="boton boton-primario boton-chico" type="button">Actualizar</button>
+    </div>
+
     <!-- INICIO -->
     <section id="vista-inicio" class="vista" data-vista="inicio">
       <h1>Transcribí tus audios</h1>
@@ -189,6 +195,8 @@
 
       <div class="tarjeta">
         <h2>Este dispositivo</h2>
+        <p><strong id="version-app"></strong></p>
+        <button id="boton-buscar-actualizacion" class="boton boton-texto" type="button">Buscar actualizaciones</button>
         <p id="info-dispositivo" class="suave chico"></p>
         <button id="boton-borrar-modelos" class="boton boton-texto peligro" type="button">Borrar modelos descargados</button>
       </div>

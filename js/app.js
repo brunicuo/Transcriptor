@@ -5,6 +5,7 @@ import { motorLocal } from './engines/whisperLocal.js';
 import { decodificarAudio } from './audio.js';
 import * as drive from './drive.js';
 import { tomarCompartidos } from './share.js';
+import { iniciarActualizaciones, buscarActualizacion, versionActual } from './actualizaciones.js';
 import {
   leerAjustes, guardarAjustes, agregarAlHistorial, actualizarEnHistorial,
   listarHistorial, borrarDelHistorial, borrarHistorial,
@@ -610,6 +611,7 @@ async function pintarModelos() {
 }
 
 async function pintarInfoDispositivo() {
+  $('version-app').textContent = `Versión ${versionActual()}`;
   const partes = [];
   partes.push(navigator.gpu ? 'Este navegador tiene WebGPU (usa la placa de video, más rápido).' : 'Sin WebGPU: se usa el procesador (más lento).');
   const info = obtenerMotor(ajustes.motor).info?.();
@@ -732,6 +734,17 @@ $('boton-desconectar').addEventListener('click', () => {
   avisar('Sesión de Google cerrada en este dispositivo.');
 });
 
+$('boton-buscar-actualizacion').addEventListener('click', async (evento) => {
+  const boton = evento.currentTarget;
+  boton.disabled = true;
+  try {
+    const hay = await buscarActualizacion({ forzar: true });
+    avisar(hay ? 'Hay una versión nueva: tocá "Actualizar" en el cartel de arriba.' : 'Ya tenés la última versión.');
+  } finally {
+    boton.disabled = false;
+  }
+});
+
 $('boton-borrar-modelos').addEventListener('click', async () => {
   if (trabajo) {
     avisar('Esperá a que termine la transcripción en curso.');
@@ -761,9 +774,7 @@ async function revisarCompartidos(llegoCompartido) {
   if (!compartidos.length && llegoCompartido) avisar('No llegó ningún audio. Probá compartirlo de nuevo.');
 }
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('Sin service worker', error));
-}
+iniciarActualizaciones({ puedeActualizar: () => !trabajo && !colaActiva, avisar });
 
 const compartido = location.search.includes('compartido');
 mostrarVista(compartido ? 'inicio' : location.hash.slice(1));

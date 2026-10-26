@@ -204,6 +204,17 @@ main { max-width: 720px; margin: 0 auto; padding: 0 16px 24px; }
 
 .formulario { margin-top: 8px; }
 
+/* Cartel de versión nueva */
+.banner-actualizacion {
+  position: sticky; top: calc(54px + env(safe-area-inset-top)); z-index: 9;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 8px 0 4px; padding: 10px 10px 10px 16px;
+  background: var(--primario-suave); color: var(--texto);
+  border: 1px solid var(--primario); border-radius: var(--radio);
+  font-weight: 600;
+}
+.banner-actualizacion .boton { flex: none; }
+
 /* Avisos cortos */
 .aviso {
   position: fixed; left: 16px; right: 16px; z-index: 20;
@@ -234,4 +245,5 @@ main { max-width: 720px; margin: 0 auto; padding: 0 16px 24px; }
   .acciones-resultado { position: static; }
   .acciones-resultado .boton:first-child { flex-basis: 140px; min-height: 52px; font-size: inherit; }
   .aviso { bottom: 24px; }
+  .banner-actualizacion { top: 72px; }
 }

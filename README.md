@@ -193,6 +193,15 @@ Mientras transcribe vas a ver una barra de progreso, y el texto aparece de a poc
 3. Tocá **Transcribir** en uno, o **Transcribir pendientes** para hacer todos, uno detrás de otro.
 4. Con la opción **Guardar el .txt en la carpeta de Drive al terminar** activada, cada transcripción se guarda sola en Drive.
 
+### Actualizaciones
+
+No hace falta desinstalar ni volver a instalar. Cuando hay una versión nueva, la app la descarga sola y muestra arriba el cartel **"Hay una versión nueva"**. Tocá **Actualizar** y listo: la app se recarga con la versión nueva y conservás el historial, las carpetas, los ajustes y el modelo descargado.
+
+* La app busca novedades al abrirla, al volver a ella y cada una hora. También podés tocar **Ajustes** y después **Buscar actualizaciones**.
+* Si está transcribiendo, el cartel espera a que termine.
+* La versión que tenés instalada aparece en **Ajustes**, en la sección **Este dispositivo**.
+* Si cambia el ícono o el nombre de la app, Android lo actualiza solo (puede tardar hasta un día).
+
 ### Historial
 
 Guarda las últimas 50 transcripciones **en este dispositivo** (solo el texto, no los audios). Se puede buscar, copiar, descargar y borrar.
@@ -231,12 +240,14 @@ Sin compilación ni dependencias: HTML, CSS y JavaScript con módulos ES. Las li
 ```
 index.html               interfaz (vistas: inicio, transcripción, drive, historial, ajustes)
 manifest.webmanifest     instalación y share_target (recibe audios de otras apps)
-sw.js                    caché sin conexión + recepción de audios compartidos
+sw.js                    caché por versión, actualizaciones y recepción de audios compartidos
+version.js               número de versión de la app
 css/app.css
 js/app.js                conecta la interfaz con todo lo demás
 js/audio.js              decodifica a 16 kHz mono (nativo; ogg-opus-decoder como respaldo)
 js/drive.js              Google Identity Services + Drive API v3
 js/share.js              toma los audios que dejó el service worker
+js/actualizaciones.js    detecta versiones nuevas y muestra el cartel "Actualizar"
 js/storage.js            ajustes (localStorage) e historial (IndexedDB)
 js/util.js
 js/engines/engine.js     contrato y registro de motores
@@ -249,6 +260,14 @@ js/engines/whisperWorker.js  transformers.js en un Web Worker (WebGPU o WebAssem
 
 **Agregar un motor nuevo** (por ejemplo, en la nube con GitHub Actions y faster-whisper): crear un archivo en `js/engines/` que cumpla el contrato descripto en `js/engines/engine.js` y registrarlo en `js/app.js` con `registrarMotor(...)`. Aparece solo en **Ajustes** y después **Motor**.
 
-**Publicar una versión nueva:** si cambiás archivos de la app, subí el número de `VERSION` en `sw.js` para que los celulares descarguen la versión nueva.
+**Publicar una versión nueva:**
+
+1. Hacé los cambios.
+2. Subí el número en `version.js` (por ejemplo `1.0.0` a `1.0.1` para arreglos, `1.1.0` para funciones nuevas). Es el número que se ve en Ajustes y en el cartel de actualización.
+3. Llevá los cambios a `main`. GitHub publica solo.
+
+Cada publicación lleva además el código del commit dentro de `sw.js` (lo agrega el workflow), así que aunque te olvides de subir el número, los dispositivos igual reciben la actualización.
+
+Cómo funciona por dentro: el service worker guarda cada versión completa en su propia caché (`transcriptor-app-VERSION-COMMIT`). La versión nueva se descarga en segundo plano y espera; cuando el usuario toca **Actualizar**, toma el control, la página se recarga una vez y se borra la caché vieja. Los modelos de Whisper, el historial, las carpetas y los ajustes no se tocan. Si cambian datos guardados en una versión futura, los ajustes nuevos toman valores por defecto (`AJUSTES_INICIALES` en `js/storage.js`) y el historial se migra subiendo la versión de IndexedDB en `abrirDb()`.
 
 **Privacidad del repo:** el `.gitignore` bloquea audios (.ogg, .opus, .mp3, .m4a, etc.) y transcripciones (.txt, .srt, .vtt) para que nunca se suban por error.

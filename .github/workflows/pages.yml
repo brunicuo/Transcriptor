@@ -27,7 +27,11 @@ jobs:
       - name: Armar la carpeta a publicar
         run: |
           mkdir _sitio
-          cp -r index.html manifest.webmanifest sw.js css js icons _sitio/
+          cp -r index.html manifest.webmanifest sw.js version.js css js icons _sitio/
+          # Cada publicación lleva el código del commit: los celulares la detectan como actualización.
+          sed -i "s/const BUILD = 'dev';/const BUILD = '${GITHUB_SHA::7}';/" _sitio/sw.js
+          grep -q "const BUILD = '${GITHUB_SHA::7}';" _sitio/sw.js
+          echo "Versión $(grep -o "'[^']*'" version.js) (build ${GITHUB_SHA::7})"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _sitio

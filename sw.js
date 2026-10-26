@@ -1,14 +1,21 @@
 // Service worker: hace que la app funcione sin internet y recibe los audios
 // que se comparten desde otras apps (Web Share Target).
 
-const VERSION = 'v1';
+// La versión visible está en version.js. BUILD lo reemplaza el workflow de publicación
+// por el código del commit, así cada publicación es una actualización aunque no se cambie
+// el número de versión.
+importScripts('./version.js');
+const BUILD = 'dev';
+const VERSION = `${self.VERSION_APP}-${BUILD}`;
 const CACHE_APP = `transcriptor-app-${VERSION}`;
-const CACHE_CDN = `transcriptor-cdn-${VERSION}`;
+// Las librerías externas tienen versión fija en su dirección: su caché no depende de la app.
+const CACHE_CDN = 'transcriptor-cdn';
 
 const ARCHIVOS_APP = [
   './',
   './index.html',
   './manifest.webmanifest',
+  './version.js',
   './css/app.css',
   './js/app.js',
   './js/util.js',
@@ -16,6 +23,7 @@ const ARCHIVOS_APP = [
   './js/audio.js',
   './js/drive.js',
   './js/share.js',
+  './js/actualizaciones.js',
   './js/engines/engine.js',
   './js/engines/whisperLocal.js',
   './js/engines/whisperWorker.js',
@@ -27,7 +35,20 @@ const ARCHIVOS_APP = [
 ];
 
 self.addEventListener('install', (evento) => {
-  evento.waitUntil(caches.open(CACHE_APP).then((cache) => cache.addAll(ARCHIVOS_APP)).then(() => self.skipWaiting()));
+  evento.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE_APP);
+      // cache: 'reload' evita que el navegador use copias viejas guardadas por su cuenta.
+      await cache.addAll(ARCHIVOS_APP.map((url) => new Request(url, { cache: 'reload' })));
+      // Primera instalación: se activa enseguida. Si es una actualización, espera a que
+      // el usuario toque "Actualizar" (así no se mezclan archivos de dos versiones).
+      if (!self.registration.active) await self.skipWaiting();
+    })(),
+  );
+});
+
+self.addEventListener('message', (evento) => {
+  if (evento.data?.tipo === 'activar') self.skipWaiting();
 });
 
 self.addEventListener('activate', (evento) => {
@@ -53,7 +74,7 @@ self.addEventListener('fetch', (evento) => {
   if (request.method !== 'GET') return;
 
   if (url.origin === self.location.origin) {
-    evento.respondWith(desdeCacheYActualizar(request));
+    evento.respondWith(desdeCacheDeLaVersion(request));
   } else if (url.hostname === 'cdn.jsdelivr.net') {
     // Librerías con versión fija: si ya están guardadas, no cambian nunca.
     evento.respondWith(primeroCache(request));
@@ -61,22 +82,17 @@ self.addEventListener('fetch', (evento) => {
   // Google, Hugging Face y demás van directo a internet.
 });
 
-async function desdeCacheYActualizar(request) {
+// Cada versión sirve sus propios archivos: la app nunca mezcla código viejo con nuevo.
+async function desdeCacheDeLaVersion(request) {
   const cache = await caches.open(CACHE_APP);
   const guardada = await cache.match(request, { ignoreSearch: request.mode === 'navigate' });
-  const deRed = fetch(request)
-    .then((respuesta) => {
-      if (respuesta.ok) cache.put(request, respuesta.clone());
-      return respuesta;
-    })
-    .catch(() => null);
-  if (guardada) {
-    // Actualiza en segundo plano para la próxima vez.
-    deRed.catch(() => {});
-    return guardada;
+  if (guardada) return guardada;
+  try {
+    return await fetch(request);
+  } catch {
+    if (request.mode === 'navigate') return (await cache.match('./')) || Response.error();
+    return Response.error();
   }
-  const respuesta = await deRed;
-  return respuesta || (await cache.match('./index.html')) || Response.error();
 }
 
 async function primeroCache(request) {

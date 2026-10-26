@@ -274,7 +274,24 @@ $('texto-resultado').addEventListener('input', () => {
 
 /* === Inicio === */
 
+// Para recibir audios compartidos, el service worker tiene que estar controlando la app.
+function pintarEstadoCompartir() {
+  const estado = $('estado-compartir');
+  if (!('serviceWorker' in navigator)) {
+    estado.textContent = 'Este navegador no puede recibir audios compartidos.';
+    estado.className = 'chico estado-texto-error';
+  } else if (navigator.serviceWorker.controller) {
+    estado.textContent = 'Recepción de audios compartidos: lista.';
+    estado.className = 'chico estado-texto-ok';
+  } else {
+    estado.textContent = 'Preparando la recepción de audios compartidos… Si este mensaje no cambia, cerrá la app del todo y volvé a abrirla.';
+    estado.className = 'chico estado-texto-error';
+  }
+}
+navigator.serviceWorker?.addEventListener('controllerchange', pintarEstadoCompartir);
+
 async function pintarEstadoMotor() {
+  pintarEstadoCompartir();
   const motor = obtenerMotor(ajustes.motor);
   const modelo = motor.modelos?.[ajustes.modelo];
   if (!modelo) {

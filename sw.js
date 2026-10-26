@@ -38,8 +38,18 @@ self.addEventListener('install', (evento) => {
   evento.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE_APP);
-      // cache: 'reload' evita que el navegador use copias viejas guardadas por su cuenta.
-      await cache.addAll(ARCHIVOS_APP.map((url) => new Request(url, { cache: 'reload' })));
+      // Se guardan de a uno: si falla un archivo secundario, el service worker se instala
+      // igual (sin él no se pueden recibir audios compartidos). cache: 'reload' evita
+      // que el navegador use copias viejas guardadas por su cuenta.
+      const resultados = await Promise.allSettled(
+        ARCHIVOS_APP.map(async (url) => {
+          const respuesta = await fetch(new Request(url, { cache: 'reload' }));
+          if (!respuesta.ok) throw new Error(`${url}: ${respuesta.status}`);
+          await cache.put(url, respuesta);
+        }),
+      );
+      const fallidos = resultados.filter((r) => r.status === 'rejected').map((r) => r.reason?.message);
+      if (fallidos.length) console.warn('No se guardaron para usar sin conexión:', fallidos);
       // Primera instalación: se activa enseguida. Si es una actualización, espera a que
       // el usuario toque "Actualizar" (así no se mezclan archivos de dos versiones).
       if (!self.registration.active) await self.skipWaiting();

@@ -204,6 +204,9 @@ main { max-width: 720px; margin: 0 auto; padding: 0 16px 24px; }
 
 .formulario { margin-top: 8px; }
 
+.estado-texto-ok { color: var(--exito); font-weight: 600; margin-top: 8px; }
+.estado-texto-error { color: var(--alerta); font-weight: 600; margin-top: 8px; }
+
 /* Cartel de versión nueva */
 .banner-actualizacion {
   position: sticky; top: calc(54px + env(safe-area-inset-top)); z-index: 9;

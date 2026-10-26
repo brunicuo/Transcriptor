@@ -1,74 +1,59 @@
-// Web Worker que ejecuta Whisper con transformers.js.
-// Intenta usar la placa de video (WebGPU) y si no puede, usa el procesador (WebAssembly).
+// Web Worker que ejecuta Whisper con transformers.js usando el procesador (WebAssembly).
+//
+// No usamos la placa de video (WebGPU): en celulares se colgaba ("device lost") y la
+// versión del modelo que necesita (q4) transcribía peor. La versión q8 sobre el
+// procesador es la que se probó y da buenos resultados.
 
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
+import { pipeline, env, WhisperTextStreamer } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
 
 env.allowLocalModels = false;
 env.useBrowserCache = true; // el modelo se descarga una sola vez y queda guardado
 
 let transcriptor = null;
 let modeloActual = null;
-let dispositivoActual = null;
+let hilosConfigurados = false;
 
-async function adaptadorWebGPU() {
-  try {
-    if (!navigator.gpu) return null;
-    return await navigator.gpu.requestAdapter();
-  } catch {
-    return null;
-  }
+function configurarHilos(hilos) {
+  if (hilosConfigurados) return;
+  hilosConfigurados = true;
+  // Varios núcleos solo funcionan con la página aislada (crossOriginIsolated),
+  // algo que activa el service worker. Si no, se usa uno solo.
+  const disponibles = navigator.hardwareConcurrency || 2;
+  const elegidos = self.crossOriginIsolated ? Math.min(4, Math.max(1, disponibles - 1)) : 1;
+  env.backends.onnx.wasm.numThreads = hilos || elegidos;
 }
 
-async function cargar({ id, modelo, repo, aceleracion = 'auto' }) {
-  const clave = `${modelo}|${aceleracion}`;
-  if (transcriptor && modeloActual === clave) {
-    postMessage({ id, tipo: 'listo', dispositivo: dispositivoActual });
+async function cargar({ id, modelo, repo, hilos }) {
+  configurarHilos(hilos);
+  if (transcriptor && modeloActual === modelo) {
+    postMessage({ id, tipo: 'listo', hilos: env.backends.onnx.wasm.numThreads });
     return;
   }
   if (transcriptor) {
     await transcriptor.dispose?.();
     transcriptor = null;
+    modeloActual = null;
   }
-
-  const progress_callback = (dato) => {
-    if (dato.status === 'progress') {
-      postMessage({ id, tipo: 'progreso', archivo: dato.file, cargado: dato.loaded, total: dato.total });
-    }
-  };
-
-  const adaptador = aceleracion === 'wasm' ? null : await adaptadorWebGPU();
-  if (adaptador) {
-    try {
-      // En WebGPU el codificador necesita buena precisión; el decodificador va comprimido (q4).
-      const precisionCodificador = modelo === 'small' && adaptador.features.has('shader-f16') ? 'fp16' : 'fp32';
-      transcriptor = await pipeline('automatic-speech-recognition', repo, {
-        device: 'webgpu',
-        dtype: { encoder_model: precisionCodificador, decoder_model_merged: 'q4' },
-        progress_callback,
-      });
-      // Prueba corta: si la placa de video no aguanta, mejor enterarse ahora.
-      await transcriptor(new Float32Array(16000), { task: 'transcribe', language: 'spanish' });
-      dispositivoActual = 'webgpu';
-    } catch (error) {
-      // No llamamos a dispose(): con la placa colgada puede quedarse esperando para siempre.
-      console.warn('WebGPU no funcionó, sigo con WebAssembly.', error);
-      transcriptor = null;
-    }
-  }
-  if (!transcriptor) {
-    transcriptor = await pipeline('automatic-speech-recognition', repo, {
-      device: 'wasm',
-      dtype: 'q8',
-      progress_callback,
-    });
-    dispositivoActual = 'wasm';
-  }
-  modeloActual = clave;
-  postMessage({ id, tipo: 'listo', dispositivo: dispositivoActual });
+  transcriptor = await pipeline('automatic-speech-recognition', repo, {
+    device: 'wasm',
+    dtype: 'q8',
+    progress_callback: (dato) => {
+      if (dato.status === 'progress') {
+        postMessage({ id, tipo: 'progreso', archivo: dato.file, cargado: dato.loaded, total: dato.total });
+      }
+    },
+  });
+  modeloActual = modelo;
+  postMessage({ id, tipo: 'listo', hilos: env.backends.onnx.wasm.numThreads });
 }
 
 async function transcribir({ id, audio, idioma }) {
-  const opciones = { task: 'transcribe', return_timestamps: false };
+  // El streamer manda el texto palabra por palabra mientras se genera.
+  const streamer = new WhisperTextStreamer(transcriptor.tokenizer, {
+    skip_prompt: true,
+    callback_function: (texto) => postMessage({ id, tipo: 'parcial', texto }),
+  });
+  const opciones = { task: 'transcribe', return_timestamps: false, streamer };
   if (idioma) opciones.language = idioma;
   const salida = await transcriptor(audio, opciones);
   postMessage({ id, tipo: 'resultado', texto: salida.text || '' });

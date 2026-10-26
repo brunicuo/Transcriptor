@@ -123,6 +123,8 @@ main { max-width: 720px; margin: 0 auto; padding: 0 16px 24px; }
   margin: 16px 0;
 }
 .consejo p { margin: 4px 0 0; color: var(--texto-suave); }
+.retomar { border-color: var(--alerta); background: var(--alerta-suave); }
+.retomar p { margin: 4px 0 0; }
 
 .etiqueta { display: block; font-weight: 600; font-size: 0.95rem; margin: 12px 0 6px; }
 .campo {

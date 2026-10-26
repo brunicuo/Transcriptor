@@ -3,23 +3,28 @@
 
 import { FRECUENCIA } from '../audio.js';
 
+// Versión q8 de los modelos: es la que se probó (ver README) y anda bien en el procesador.
 const MODELOS = {
   base: {
     nombre: 'Rápido (base)',
-    descripcion: 'Descarga de unos 80 a 150 MB. Ideal para audios de WhatsApp.',
-    repo: 'onnx-community/whisper-base',
+    descripcion: 'Descarga de 77 MB. Rápido; puede equivocarse en palabras poco comunes.',
+    repo: 'Xenova/whisper-base',
   },
   small: {
     nombre: 'Preciso (small)',
-    descripcion: 'Descarga de unos 250 a 450 MB. Más lento, se equivoca menos.',
-    repo: 'onnx-community/whisper-small',
+    descripcion: 'Descarga de 250 MB. Se equivoca mucho menos, pero tarda unas tres veces más.',
+    repo: 'Xenova/whisper-small',
   },
 };
+const ARCHIVOS_ONNX = ['onnx/encoder_model_quantized.onnx', 'onnx/decoder_model_merged_quantized.onnx'];
+const CACHE_MODELOS = 'transformers-cache';
 
 // Whisper trabaja con ventanas de 30 segundos: cortamos el audio en pedazos
 // de hasta 28 s, buscando un silencio para no partir palabras.
 const MAX_SEGUNDOS = 28;
 const MIN_SEGUNDOS = 18;
+// Para estimar el avance dentro de un pedazo: en el habla hay unos 14 caracteres por segundo.
+const CARACTERES_POR_SEGUNDO = 14;
 
 // Frases que Whisper "inventa" cuando escucha silencio o ruido.
 const ALUCINACIONES = [
@@ -34,8 +39,8 @@ let contador = 0;
 const pendientes = new Map();
 let modeloCargado = null;
 let cargando = null;
-let dispositivo = null;
-let ultimaPreparacion = null;
+let hilos = null;
+let forzarUnHilo = false;
 
 function obtenerWorker() {
   if (!worker) {
@@ -43,8 +48,8 @@ function obtenerWorker() {
     worker.onmessage = ({ data }) => {
       const pedido = pendientes.get(data.id);
       if (!pedido) return;
-      if (data.tipo === 'progreso') {
-        pedido.onProgreso?.(data);
+      if (data.tipo === 'progreso' || data.tipo === 'parcial') {
+        pedido.onEvento?.(data);
         return;
       }
       pendientes.delete(data.id);
@@ -52,66 +57,22 @@ function obtenerWorker() {
       else pedido.resolve(data);
     };
     worker.onerror = (evento) => {
-      for (const pedido of pendientes.values()) pedido.reject(new Error(evento.message || 'Falló el motor de transcripción.'));
-      pendientes.clear();
-      worker = null;
-      modeloCargado = null;
+      evento.preventDefault?.();
+      reiniciarWorker(new Error(evento.message || 'El motor de transcripción se detuvo de golpe.'));
     };
   }
   return worker;
 }
 
-function pedir(tipo, datos, { onProgreso, transferir = [] } = {}) {
+function pedir(tipo, datos, { onEvento, transferir = [] } = {}) {
   const id = ++contador;
   return new Promise((resolve, reject) => {
-    pendientes.set(id, { resolve, reject, onProgreso });
+    pendientes.set(id, { resolve, reject, onEvento });
     obtenerWorker().postMessage({ id, tipo, ...datos }, transferir);
   });
 }
 
-async function preparar({ modelo = 'base', aceleracion = 'auto', onProgreso, signal } = {}) {
-  const soltar = cortarAlCancelar(signal);
-  try {
-    await cargarModelo({ modelo, aceleracion, onProgreso });
-  } finally {
-    soltar();
-  }
-}
-
-async function cargarModelo({ modelo, aceleracion, onProgreso }) {
-  const elegido = MODELOS[modelo] ? modelo : 'base';
-  const clave = `${elegido}|${aceleracion}`;
-  if (modeloCargado === clave) return;
-  if (cargando) await cargando.catch(() => {});
-  if (modeloCargado === clave) return;
-  ultimaPreparacion = { modelo: elegido, aceleracion, onProgreso };
-
-  // Sumamos el avance de todos los archivos del modelo para mostrar un solo porcentaje.
-  const archivos = {};
-  cargando = pedir('cargar', { modelo: elegido, repo: MODELOS[elegido].repo, aceleracion }, {
-    onProgreso: (dato) => {
-      archivos[dato.archivo] = { cargado: dato.cargado || 0, total: dato.total || 0 };
-      const lista = Object.values(archivos);
-      const total = lista.reduce((s, a) => s + a.total, 0);
-      const cargado = lista.reduce((s, a) => s + a.cargado, 0);
-      onProgreso?.({ etapa: 'descarga', fraccion: total ? cargado / total : 0, cargado, total });
-    },
-  });
-  try {
-    const respuesta = await cargando;
-    dispositivo = respuesta.dispositivo;
-    modeloCargado = clave;
-  } catch (error) {
-    if (/fetch|network|load failed/i.test(error.message)) {
-      throw new Error('No se pudo descargar el modelo. Revisá la conexión a internet y probá de nuevo.');
-    }
-    throw error;
-  } finally {
-    cargando = null;
-  }
-}
-
-/** Descarta el worker (por ejemplo, si la placa de video se colgó) para empezar de cero. */
+/** Descarta el worker para empezar de cero (al cancelar, o si se trabó). */
 function reiniciarWorker(motivo = new Error('Se reinició el motor.')) {
   worker?.terminate();
   worker = null;
@@ -121,7 +82,7 @@ function reiniciarWorker(motivo = new Error('Se reinició el motor.')) {
   pendientes.clear();
 }
 
-/** Cancelar corta en el acto, aunque el motor esté en medio de un cálculo largo o trabado. */
+/** Cancelar corta en el acto, aunque el motor esté en medio de un cálculo largo. */
 function cortarAlCancelar(signal) {
   if (!signal) return () => {};
   if (signal.aborted) throw new DOMException('Cancelado', 'AbortError');
@@ -130,7 +91,84 @@ function cortarAlCancelar(signal) {
   return () => signal.removeEventListener('abort', cortar);
 }
 
-function dividirAudio(muestras) {
+function esErrorDeRed(error) {
+  return /fetch|network|load failed|Failed to download/i.test(error?.message || '');
+}
+
+async function cargarModelo(modelo, onProgreso) {
+  if (modeloCargado === modelo) return;
+  // Si ya se está cargando (por ejemplo, la precarga al abrir la app), esperamos esa misma carga.
+  if (cargando) {
+    if (cargando.modelo === modelo) {
+      const enCurso = cargando;
+      enCurso.oyentes.add(onProgreso);
+      try {
+        await enCurso.promesa;
+        return;
+      } finally {
+        enCurso.oyentes.delete(onProgreso);
+      }
+    }
+    await cargando.promesa.catch(() => {});
+    if (modeloCargado === modelo) return;
+  }
+
+  // Sumamos el avance de todos los archivos del modelo para mostrar un solo porcentaje.
+  const archivos = {};
+  const oyentes = new Set([onProgreso]);
+  const promesa = pedir('cargar', { modelo, repo: MODELOS[modelo].repo, hilos: forzarUnHilo ? 1 : undefined }, {
+    onEvento: (dato) => {
+      archivos[dato.archivo] = { cargado: dato.cargado || 0, total: dato.total || 0 };
+      const lista = Object.values(archivos);
+      const total = lista.reduce((s, a) => s + a.total, 0);
+      const cargado = lista.reduce((s, a) => s + a.cargado, 0);
+      for (const oyente of oyentes) oyente?.({ etapa: 'descarga', fraccion: total ? cargado / total : 0, cargado, total });
+    },
+  });
+  const actual = { modelo, promesa, oyentes };
+  cargando = actual;
+  try {
+    const respuesta = await promesa;
+    hilos = respuesta.hilos;
+    modeloCargado = modelo;
+  } finally {
+    if (cargando === actual) cargando = null;
+  }
+}
+
+async function preparar({ modelo = 'base', onProgreso, signal } = {}) {
+  const elegido = MODELOS[modelo] ? modelo : 'base';
+  const soltar = cortarAlCancelar(signal);
+  try {
+    try {
+      await cargarModelo(elegido, onProgreso);
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      if (esErrorDeRed(error)) {
+        throw new Error('No se pudo descargar el modelo. Revisá la conexión a internet y probá de nuevo.');
+      }
+      if (forzarUnHilo) throw error;
+      // Con varios núcleos el celular necesita más memoria: probamos de nuevo con uno solo.
+      console.warn('Falló la carga del modelo, pruebo con un solo núcleo.', error);
+      forzarUnHilo = true;
+      reiniciarWorker();
+      await cargarModelo(elegido, onProgreso);
+    }
+  } finally {
+    soltar();
+  }
+}
+
+/** Carga el modelo en segundo plano (si ya está descargado) para que la primera transcripción arranque antes. */
+async function precargar(modelo = 'base') {
+  const elegido = MODELOS[modelo] ? modelo : 'base';
+  if (modeloCargado === elegido || cargando) return;
+  const descargados = await modelosDescargados();
+  if (!descargados[elegido] || modeloCargado === elegido || cargando) return;
+  await cargarModelo(elegido).catch((error) => console.warn('No se pudo precargar el modelo', error));
+}
+
+export function dividirAudio(muestras) {
   const maximo = MAX_SEGUNDOS * FRECUENCIA;
   if (muestras.length <= 30 * FRECUENCIA) return [muestras];
 
@@ -162,86 +200,111 @@ function esSilencio(muestras) {
   return Math.sqrt(suma / muestras.length) < 0.002;
 }
 
-function limpiar(texto) {
-  const t = texto.trim();
-  return ALUCINACIONES.some((patron) => patron.test(t)) ? '' : t;
+export function limpiarTexto(texto) {
+  let t = texto.replace(/\s+/g, ' ').trim();
+  if (ALUCINACIONES.some((patron) => patron.test(t))) return '';
+  // Cuando se traba, Whisper repite la misma frase muchas veces seguidas: dejamos una.
+  t = t.replace(/(\S.{5,80}?)(?:[\s,.]+\1){3,}/g, '$1');
+  return t;
 }
 
-async function transcribir(audio, { idioma = 'spanish', onProgreso, onParcial, onFallaGPU, signal } = {}) {
+/**
+ * @param {{ muestras: Float32Array }} audio
+ * @param {{ idioma?: string, onProgreso?: Function, onParcial?: Function, onPedazo?: Function,
+ *           signal?: AbortSignal, desde?: number, textosPrevios?: string[] }} opciones
+ *   desde / textosPrevios: para retomar una transcripción interrumpida.
+ *   onPedazo({ siguiente, total, textos }): se llama al terminar cada pedazo (para guardar el avance).
+ */
+async function transcribir(audio, opciones = {}) {
   if (!modeloCargado) throw new Error('El modelo no está cargado.');
-  const soltar = cortarAlCancelar(signal);
+  const soltar = cortarAlCancelar(opciones.signal);
   try {
-    return await transcribirPedazos(audio, { idioma, onProgreso, onParcial, onFallaGPU, signal });
+    return await transcribirPedazos(audio, opciones);
   } finally {
     soltar();
   }
 }
 
-async function transcribirPedazos(audio, { idioma, onProgreso, onParcial, onFallaGPU, signal }) {
+async function transcribirPedazos(audio, { idioma = 'spanish', onProgreso, onParcial, onPedazo, signal, desde = 0, textosPrevios = [] }) {
   const pedazos = dividirAudio(audio.muestras);
-  const textos = [];
-  const segmentos = [];
-  let desde = 0;
-  onProgreso?.({ etapa: 'transcripcion', fraccion: 0 });
+  const textos = [...textosPrevios];
+  const total = pedazos.length;
+  onParcial?.(textos.join(' '));
+  onProgreso?.({ etapa: 'transcripcion', fraccion: desde / total, pedazo: desde, total });
 
-  for (let i = 0; i < pedazos.length; i++) {
+  for (let i = desde; i < total; i++) {
     if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
     const pedazo = pedazos[i];
     const duracion = pedazo.length / FRECUENCIA;
     if (!esSilencio(pedazo)) {
-      // Copiamos el pedazo porque se transfiere al worker.
-      let texto;
-      try {
-        const copia = pedazo.slice();
-        ({ texto } = await pedir('transcribir', { audio: copia, idioma }, { transferir: [copia.buffer] }));
-      } catch (error) {
-        if (dispositivo !== 'webgpu' || error.name === 'AbortError') throw error;
-        // La placa de video de algunos celulares se cuelga ("device lost"): seguimos con el
-        // procesador desde este mismo pedazo, sin perder lo ya transcripto.
-        console.warn('Falló WebGPU, sigo con WebAssembly.', error);
-        onFallaGPU?.();
-        reiniciarWorker();
-        await cargarModelo({ ...ultimaPreparacion, aceleracion: 'wasm' });
-        const copia = pedazo.slice();
-        ({ texto } = await pedir('transcribir', { audio: copia, idioma }, { transferir: [copia.buffer] }));
-      }
-      const limpio = limpiar(texto || '');
-      if (limpio) {
-        textos.push(limpio);
-        segmentos.push({ desde, hasta: desde + duracion, texto: limpio });
-        onParcial?.(textos.join(' '));
-      }
+      let enCurso = '';
+      const copia = pedazo.slice(); // se transfiere al worker
+      const { texto } = await pedir('transcribir', { audio: copia, idioma }, {
+        transferir: [copia.buffer],
+        onEvento: (dato) => {
+          enCurso += dato.texto;
+          onParcial?.([...textos, enCurso.trim()].join(' ').trim());
+          const dentro = Math.min(0.95, enCurso.length / (duracion * CARACTERES_POR_SEGUNDO));
+          onProgreso?.({ etapa: 'transcripcion', fraccion: (i + dentro) / total, pedazo: i, total });
+        },
+      });
+      const limpio = limpiarTexto(texto || '');
+      if (limpio) textos.push(limpio);
     }
-    desde += duracion;
-    onProgreso?.({ etapa: 'transcripcion', fraccion: (i + 1) / pedazos.length });
+    onParcial?.(textos.join(' '));
+    onProgreso?.({ etapa: 'transcripcion', fraccion: (i + 1) / total, pedazo: i + 1, total });
+    await onPedazo?.({ siguiente: i + 1, total, textos: [...textos] });
   }
-  return { texto: textos.join(' '), segmentos };
+  return { texto: textos.join(' '), segmentos: [] };
 }
 
 async function disponible() {
   return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined';
 }
 
-/** ¿Qué modelos ya están descargados en este dispositivo? */
-async function modelosDescargados() {
-  const resultado = {};
+async function clavesDelCache() {
   try {
-    const cache = await caches.open('transformers-cache');
-    const claves = (await cache.keys()).map((r) => r.url);
-    for (const [id, m] of Object.entries(MODELOS)) {
-      resultado[id] = claves.some((url) => url.includes(`${m.repo}/`) && url.includes('.onnx'));
-    }
+    const cache = await caches.open(CACHE_MODELOS);
+    return { cache, claves: await cache.keys() };
   } catch {
-    // Sin Cache Storage no podemos saberlo.
+    return { cache: null, claves: [] };
+  }
+}
+
+/** ¿Qué modelos ya están descargados completos en este dispositivo? */
+async function modelosDescargados() {
+  const { claves } = await clavesDelCache();
+  const urls = claves.map((r) => r.url);
+  const resultado = {};
+  for (const [id, m] of Object.entries(MODELOS)) {
+    resultado[id] = ARCHIVOS_ONNX.every((archivo) => urls.some((url) => url.includes(`/${m.repo}/`) && url.endsWith(archivo)));
   }
   return resultado;
 }
 
+/**
+ * Borra archivos de modelos que esta versión ya no usa (por ejemplo, los de la
+ * placa de video de versiones anteriores), que pueden ocupar cientos de MB.
+ */
+async function limpiarArchivosViejos() {
+  const { cache, claves } = await clavesDelCache();
+  if (!cache) return 0;
+  const enUso = Object.values(MODELOS).map((m) => `/${m.repo}/`);
+  let borrados = 0;
+  for (const pedido of claves) {
+    const ajeno = !enUso.some((ruta) => pedido.url.includes(ruta));
+    const onnxViejo = pedido.url.includes('/onnx/') && !ARCHIVOS_ONNX.some((a) => pedido.url.endsWith(a));
+    if (ajeno || onnxViejo) {
+      await cache.delete(pedido);
+      borrados++;
+    }
+  }
+  return borrados;
+}
+
 async function borrarModelos() {
-  await caches.delete('transformers-cache');
-  if (worker) worker.terminate();
-  worker = null;
-  modeloCargado = null;
+  reiniciarWorker();
+  await caches.delete(CACHE_MODELOS);
 }
 
 export const motorLocal = {
@@ -251,8 +314,10 @@ export const motorLocal = {
   modelos: MODELOS,
   disponible,
   preparar,
+  precargar,
   transcribir,
   modelosDescargados,
+  limpiarArchivosViejos,
   borrarModelos,
-  info: () => ({ dispositivo, modelo: modeloCargado?.split('|')[0] }),
+  info: () => ({ modelo: modeloCargado, hilos, cargando: Boolean(cargando) }),
 };

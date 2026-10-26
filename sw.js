@@ -1,5 +1,5 @@
-// Service worker: hace que la app funcione sin internet y recibe los audios
-// que se comparten desde otras apps (Web Share Target).
+// Service worker: hace que la app funcione sin internet, recibe los audios que se
+// comparten desde otras apps (Web Share Target) y habilita el uso de varios núcleos.
 
 // La versión visible está en version.js. BUILD lo reemplaza el workflow de publicación
 // por el código del commit, así cada publicación es una actualización aunque no se cambie
@@ -24,6 +24,14 @@ const ARCHIVOS_APP = [
   './js/drive.js',
   './js/share.js',
   './js/actualizaciones.js',
+  './js/ffmpeg.js',
+  './js/vendor/ffmpeg/index.js',
+  './js/vendor/ffmpeg/classes.js',
+  './js/vendor/ffmpeg/worker.js',
+  './js/vendor/ffmpeg/const.js',
+  './js/vendor/ffmpeg/errors.js',
+  './js/vendor/ffmpeg/types.js',
+  './js/vendor/ffmpeg/utils.js',
   './js/engines/engine.js',
   './js/engines/whisperLocal.js',
   './js/engines/whisperWorker.js',
@@ -96,13 +104,27 @@ self.addEventListener('fetch', (evento) => {
 async function desdeCacheDeLaVersion(request) {
   const cache = await caches.open(CACHE_APP);
   const guardada = await cache.match(request, { ignoreSearch: request.mode === 'navigate' });
-  if (guardada) return guardada;
+  if (guardada) return conAislamiento(guardada);
   try {
-    return await fetch(request);
+    return conAislamiento(await fetch(request));
   } catch {
-    if (request.mode === 'navigate') return (await cache.match('./')) || Response.error();
+    if (request.mode === 'navigate') {
+      const inicio = await cache.match('./');
+      if (inicio) return conAislamiento(inicio);
+    }
     return Response.error();
   }
+}
+
+// Cabeceras que "aíslan" la página (cross-origin isolation): con ellas el navegador deja
+// transcribir usando varios núcleos del procesador. GitHub Pages no permite configurarlas,
+// así que las agrega el service worker a todo lo que sirve del propio sitio.
+function conAislamiento(respuesta) {
+  if (!respuesta || respuesta.status === 0 || respuesta.type === 'opaqueredirect') return respuesta;
+  const cabeceras = new Headers(respuesta.headers);
+  cabeceras.set('Cross-Origin-Opener-Policy', 'same-origin');
+  cabeceras.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  return new Response(respuesta.body, { status: respuesta.status, statusText: respuesta.statusText, headers: cabeceras });
 }
 
 async function primeroCache(request) {

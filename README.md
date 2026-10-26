@@ -103,8 +103,14 @@ Mientras la app está "en prueba", solo las cuentas que agregues acá pueden usa
    ```
 
    (Sin barra al final y sin `/Transcriptor`).
-6. **URIs de redireccionamiento autorizados:** dejalo vacío.
-7. Tocá **Crear**.
+6. En **URIs de redireccionamiento autorizados** tocá **Agregar URI** y pegá exactamente (esta vez **con** `/Transcriptor/` y la barra final):
+
+   ```
+   https://brunicuo.github.io/Transcriptor/
+   ```
+
+   Es la dirección a la que Google te devuelve después de dar permiso.
+7. Tocá **Crear** (o **Guardar** si estás editando un cliente que ya tenías).
 8. Aparece una ventana con el **ID de cliente**: algo como `123456789012-abcdefg.apps.googleusercontent.com`. Copialo.
 
 > No hace falta el "secreto del cliente". La app no lo usa y no hay que pegarlo en ningún lado.
@@ -117,7 +123,7 @@ Mientras la app está "en prueba", solo las cuentas que agregues acá pueden usa
 
 ### 2.8. La primera vez que te conectes
 
-Cuando toques **Conectar con Google** o **Leer Drive**:
+Cuando toques **Conectar con Google** o **Leer Drive**, la app te lleva a la página de Google y después te trae de vuelta sola:
 
 1. Elegí tu cuenta.
 2. Google va a decir **"Google no verificó esta app"**. Es normal: la app es tuya y está en prueba. Tocá **Continuar**.
@@ -148,7 +154,7 @@ Cuando toques **Conectar con Google** o **Leer Drive**:
 
 ## 4. Usarla en la computadora
 
-1. Abrí **https://brunicuo.github.io/Transcriptor/** en Chrome o Edge (los más rápidos, porque usan la placa de video).
+1. Abrí **https://brunicuo.github.io/Transcriptor/** en Chrome o Edge.
 2. Opcional: para tenerla como programa, tocá el ícono de **Instalar** que aparece a la derecha de la barra de direcciones.
 
 ---
@@ -158,18 +164,21 @@ Cuando toques **Conectar con Google** o **Leer Drive**:
 ### Primera vez
 
 * La primera transcripción **descarga el modelo** de reconocimiento de voz. Conviene hacerla con wifi:
-  * **Rápido (base):** entre 80 y 150 MB. Ideal para audios de WhatsApp.
-  * **Preciso (small):** entre 250 y 450 MB. Más lento, se equivoca menos.
+  * **Rápido (base):** 77 MB. Bueno para el día a día; a veces se equivoca en palabras poco comunes.
+  * **Preciso (small):** 250 MB. Se equivoca mucho menos, pero tarda unas tres veces más.
 * Se descarga **una sola vez** y queda guardado. Después funciona sin internet.
+* Cada vez que abrís la app, el modelo se carga solo en segundo plano. En Inicio dice **"listo para transcribir"** cuando terminó.
 * El modelo se elige en **Ajustes** y después **Modelo**.
 
 ### Transcribir
 
-* **Elegir audio:** tocás el botón y elegís un archivo (.ogg, .opus, .mp3 o .m4a).
+* **Elegir audio:** tocás el botón y elegís un archivo. Lee los formatos comunes (.ogg, .opus, .mp3, .m4a, .wav, .aac, .flac, .webm) y también los raros (.amr de grabadoras de llamadas, .wma, .caf, ALAC). Para los raros, la primera vez descarga un conversor de unos 32 MB.
 * **Compartir desde WhatsApp:** ver la sección 3.
 * **Leer Drive:** ver más abajo.
 
-Mientras transcribe vas a ver una barra de progreso, y el texto aparece de a poco. **No bloquees el celular ni cambies de app** mientras transcribe: Android puede frenar el proceso. (La app intenta mantener la pantalla encendida).
+Mientras transcribe vas a ver una barra de progreso con el tiempo que falta (estimado), y el texto aparece palabra por palabra.
+
+**Si salís de la app:** podés usar otras apps mientras transcribe, pero Android puede pausar o cerrar Transcriptor si estás mucho tiempo afuera. No se pierde nada: la app guarda el avance cada unos 25 segundos de audio, y al volver te muestra **"Transcripción sin terminar"** con el botón **Continuar**, que sigue desde donde quedó.
 
 ### El resultado
 
@@ -213,9 +222,9 @@ Guarda las últimas 50 transcripciones **en este dispositivo** (solo el texto, n
 | Problema | Qué hacer |
 | --- | --- |
 | "No se pudo descargar el modelo" | Revisá la conexión. La primera descarga es grande: usá wifi. |
-| Tarda mucho | Usá el modelo **Rápido**. En celulares sin WebGPU, un audio de 1 minuto puede tardar un par de minutos. |
+| Tarda mucho | Usá el modelo **Rápido**. Whisper procesa el audio en bloques de 30 segundos: un audio de 5 segundos tarda casi lo mismo que uno de 25. En **Ajustes** podés ver cuántos núcleos del procesador usa. |
 | "La sesión de Google venció" | Tocá **Conectar con Google** de nuevo. |
-| "Error 400: redirect_uri_mismatch" o "origin_mismatch" | Revisá el paso 2.6: el origen tiene que ser exactamente `https://brunicuo.github.io`. |
+| "Error 400: redirect_uri_mismatch" | Falta la dirección de retorno. Revisá el paso 2.6: tiene que estar exactamente `https://brunicuo.github.io/Transcriptor/` en **URIs de redireccionamiento autorizados**. |
 | "Acceso bloqueado: la app no completó el proceso de verificación" | Tu correo no está como usuario de prueba. Revisá el paso 2.4. |
 | "No se encontró la carpeta" | Revisá el link y que la carpeta sea de la misma cuenta con la que te conectaste (o que esté compartida con ella). |
 | El celular se quedó sin espacio | **Ajustes** y después **Borrar modelos descargados**. Se vuelven a bajar cuando haga falta. |
@@ -244,19 +253,28 @@ sw.js                    caché por versión, actualizaciones y recepción de au
 version.js               número de versión de la app
 css/app.css
 js/app.js                conecta la interfaz con todo lo demás
-js/audio.js              decodifica a 16 kHz mono (nativo; ogg-opus-decoder como respaldo)
-js/drive.js              Google Identity Services + Drive API v3
+js/audio.js              decodifica a 16 kHz mono (el navegador; FFmpeg como respaldo)
+js/ffmpeg.js             respaldo con ffmpeg.wasm para formatos raros (AMR, WMA, ALAC...)
+js/vendor/ffmpeg/        envoltorio de ffmpeg.wasm (MIT), ver LEEME.md
+js/drive.js              OAuth de Google por redirección + Drive API v3
 js/share.js              toma los audios que dejó el service worker
 js/actualizaciones.js    detecta versiones nuevas y muestra el cartel "Actualizar"
-js/storage.js            ajustes (localStorage) e historial (IndexedDB)
+js/storage.js            ajustes (localStorage), historial y trabajos en curso (IndexedDB)
 js/util.js
 js/engines/engine.js     contrato y registro de motores
 js/engines/whisperLocal.js   motor local (divide el audio en tramos de hasta 28 s)
-js/engines/whisperWorker.js  transformers.js en un Web Worker (WebGPU o WebAssembly)
+js/engines/whisperWorker.js  transformers.js en un Web Worker (WebAssembly, varios núcleos)
 .github/workflows/pages.yml  publicación en GitHub Pages
 ```
 
-**Probar en la compu:** desde la carpeta del repo, `python3 -m http.server 8080` y abrir http://localhost:8080 (para Drive, agregá `http://localhost:8080` como origen autorizado en el cliente OAuth).
+**Probar en la compu:** desde la carpeta del repo, `python3 -m http.server 8080` y abrir http://localhost:8080 (para Drive, agregá `http://localhost:8080` como origen autorizado y `http://localhost:8080/` como URI de redireccionamiento en el cliente OAuth).
+
+**Decisiones técnicas (y por qué):**
+
+* **Modelos `Xenova/whisper-base` y `Xenova/whisper-small` en versión q8, sobre el procesador (WebAssembly).** Se probaron con audios en español rioplatense en formato de WhatsApp (Ogg Opus, con y sin ruido de fondo): base comete entre 4% y 8% de palabras erradas, y small entre 1% y 6%. No se usa la placa de video (WebGPU): en celulares se colgaba ("device lost") y la versión del modelo que necesita (q4) transcribe peor.
+* **Varios núcleos:** ONNX Runtime usa hasta 4 hilos si la página está "aislada" (cross-origin isolation). GitHub Pages no permite configurar esas cabeceras, así que las agrega `sw.js`. En las pruebas, eso hizo la transcripción entre 1,5 y 2 veces más rápida.
+* **Login de Google por redirección** (flujo implícito de OAuth) en vez de ventana emergente: las ventanas emergentes de Google no funcionan con la página aislada.
+* **Avance guardado por tramos:** cada transcripción se guarda en IndexedDB (con su audio) y se actualiza al terminar cada tramo, para poder retomarla si Android cierra la app.
 
 **Agregar un motor nuevo** (por ejemplo, en la nube con GitHub Actions y faster-whisper): crear un archivo en `js/engines/` que cumpla el contrato descripto en `js/engines/engine.js` y registrarlo en `js/app.js` con `registrarMotor(...)`. Aparece solo en **Ajustes** y después **Motor**.
 
@@ -269,5 +287,7 @@ js/engines/whisperWorker.js  transformers.js en un Web Worker (WebGPU o WebAssem
 Cada publicación lleva además el código del commit dentro de `sw.js` (lo agrega el workflow), así que aunque te olvides de subir el número, los dispositivos igual reciben la actualización.
 
 Cómo funciona por dentro: el service worker guarda cada versión completa en su propia caché (`transcriptor-app-VERSION-COMMIT`). La versión nueva se descarga en segundo plano y espera; cuando el usuario toca **Actualizar**, toma el control, la página se recarga una vez y se borra la caché vieja. Los modelos de Whisper, el historial, las carpetas y los ajustes no se tocan. Si cambian datos guardados en una versión futura, los ajustes nuevos toman valores por defecto (`AJUSTES_INICIALES` en `js/storage.js`) y el historial se migra subiendo la versión de IndexedDB en `abrirDb()`.
+
+**Pruebas:** cada versión se probó de punta a punta en Chromium con Whisper real (no simulado): primera vez, segunda apertura sin internet, compartir desde WhatsApp, cierre de la app a mitad de camino y retomar, cancelar, formatos raros, actualización desde la versión anterior conservando el historial, y Drive completo (login, listar, transcribir, guardar el .txt, permiso vencido).
 
 **Privacidad del repo:** el `.gitignore` bloquea audios (.ogg, .opus, .mp3, .m4a, etc.) y transcripciones (.txt, .srt, .vtt) para que nunca se suban por error.

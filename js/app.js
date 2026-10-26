@@ -9,6 +9,7 @@ import { iniciarActualizaciones, buscarActualizacion, versionActual } from './ac
 import {
   leerAjustes, guardarAjustes, agregarAlHistorial, actualizarEnHistorial,
   listarHistorial, borrarDelHistorial, borrarHistorial,
+  guardarTrabajo, listarTrabajos, borrarTrabajo,
 } from './storage.js';
 import {
   extraerIdCarpeta, nombreTxt, formatearFecha, formatearTamano, formatearDuracion,
@@ -39,7 +40,10 @@ function mostrarVista(nombre) {
   if (vista === 'drive') pintarVistaDrive();
   if (vista === 'historial') pintarHistorial();
   if (vista === 'ajustes') pintarAjustes();
-  if (vista === 'inicio') pintarEstadoMotor();
+  if (vista === 'inicio') {
+    pintarEstadoMotor();
+    pintarRetomar();
+  }
   pintarTrabajoGlobal();
   window.scrollTo(0, 0);
 }
@@ -119,17 +123,45 @@ document.addEventListener('visibilitychange', () => {
   if (trabajo && document.visibilityState === 'visible') mantenerPantallaEncendida();
 });
 
+function formatearSegundos(segundos) {
+  const s = Math.max(1, Math.round(segundos));
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`;
+}
+
+/** Texto bajo la barra: duración del audio, tramo y tiempo que falta (estimado). */
+function notaDeTranscripcion(duracion, { fraccion, pedazo, total }, inicio, fraccionInicial) {
+  const partes = [`Audio de ${formatearDuracion(duracion)}`];
+  if (total > 1) partes.push(`tramo ${Math.min(pedazo + 1, total)} de ${total}`);
+  const transcurrido = (Date.now() - inicio) / 1000;
+  const avance = fraccion - fraccionInicial;
+  if (avance > 0.04 && transcurrido > 4 && fraccion < 1) {
+    partes.push(`faltan unos ${formatearSegundos((transcurrido / avance) * (1 - fraccion))}`);
+  }
+  return partes.join(', ');
+}
+
+function mostrarParcial(texto) {
+  const area = $('texto-resultado');
+  area.value = texto;
+  area.scrollTop = area.scrollHeight;
+}
+
 /**
  * Transcribe un audio de punta a punta y lo guarda en el historial.
- * @param {{ fuente: () => Promise<Blob>, nombre: string, origen: string,
- *           drive?: { archivoId: string, carpetaId: string }, mostrar?: boolean, etiquetaCola?: string }} pedido
+ * El audio y el avance se guardan en el dispositivo mientras dura, para poder
+ * retomar si el celular cierra la app a mitad de camino.
+ * @param {{ fuente?: () => Promise<Blob>, nombre: string, origen: string,
+ *           drive?: { archivoId: string, carpetaId: string }, mostrar?: boolean,
+ *           etiquetaCola?: string, guardado?: object }} pedido
+ *   guardado: un trabajo de la base (audio compartido que espera, o uno interrumpido).
  */
-async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, mostrar = true, etiquetaCola = '' }) {
+async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, mostrar = true, etiquetaCola = '', guardado = null }) {
   if (trabajo) throw new Error('Ya hay una transcripción en curso. Mirá su avance en la barra de arriba o cancelala ahí.');
   const controlador = new AbortController();
-  trabajo = { nombre, controlador, etiquetaCola, mostrar, etapa: 'Preparando', fraccion: null };
+  const { signal } = controlador;
+  trabajo = { nombre, controlador, etiquetaCola, mostrar, etapa: 'Preparando', fraccion: null, registroId: guardado?.id ?? null };
   const cancelado = () => {
-    if (controlador.signal.aborted) throw new DOMException('Cancelado', 'AbortError');
+    if (signal.aborted) throw new DOMException('Cancelado', 'AbortError');
   };
 
   if (mostrar) {
@@ -140,41 +172,82 @@ async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, m
   mantenerPantallaEncendida();
   navigator.storage?.persist?.().catch(() => {});
 
-  try {
-    progreso(origen === 'drive' ? 'Bajando el audio de Drive' : 'Leyendo el audio', null);
-    const blob = await fuente();
-    cancelado();
-    progreso('Preparando el audio', null);
-    const audio = await decodificarAudio(blob);
-    cancelado();
+  const motor = obtenerMotor(ajustes.motor);
+  const modelo = ajustes.modelo;
+  const descargados = (await motor.modelosDescargados?.()) || {};
+  const etapaModelo = descargados[modelo] ? 'Cargando el modelo' : 'Descargando el modelo (solo la primera vez)';
+  // El modelo se carga mientras se lee el audio, para ganar tiempo.
+  let fase = 'audio';
+  let ultimoModelo = { fraccion: null, cargado: 0, total: 0 };
+  const notaModelo = ({ cargado, total }) => (total ? `${formatearTamano(cargado)} de ${formatearTamano(total)}` : '');
+  const preparado = motor.preparar({
+    modelo,
+    signal,
+    onProgreso: (dato) => {
+      ultimoModelo = dato;
+      if (fase === 'modelo') progreso(etapaModelo, dato.fraccion, notaModelo(dato));
+    },
+  });
+  preparado.catch(() => {}); // el error se atiende más abajo, al esperarla
 
-    const motor = obtenerMotor(ajustes.motor);
-    const descargados = (await motor.modelosDescargados?.()) || {};
-    const etapaModelo = descargados[ajustes.modelo] ? 'Cargando el modelo' : 'Descargando el modelo (solo la primera vez)';
-    progreso(etapaModelo, null);
-    await motor.preparar({
-      modelo: ajustes.modelo,
-      aceleracion: ajustes.aceleracion,
-      signal: controlador.signal,
-      onProgreso: ({ fraccion, cargado, total }) =>
-        progreso(etapaModelo, fraccion, total ? `${formatearTamano(cargado)} de ${formatearTamano(total)}` : ''),
+  let registro = guardado;
+  try {
+    progreso(origen === 'drive' && !guardado ? 'Bajando el audio de Drive' : 'Leyendo el audio', null);
+    const blob = guardado?.archivo || (await fuente());
+    cancelado();
+    try {
+      registro = await guardarTrabajo({
+        siguiente: 0,
+        textos: [],
+        creado: Date.now(),
+        ...(registro || {}),
+        nombre,
+        origen,
+        drive: datosDrive,
+        archivo: blob,
+        estado: 'en-curso',
+      });
+      trabajo.registroId = registro.id;
+    } catch (error) {
+      // Sin espacio para guardar el avance: se transcribe igual, pero no se podrá retomar.
+      console.warn('No se pudo guardar el trabajo para retomarlo', error);
+      registro = null;
+    }
+
+    progreso('Preparando el audio', null);
+    const audio = await decodificarAudio(blob, {
+      onRespaldo: () => progreso('Preparando el audio (formato especial, la primera vez tarda más)', null),
     });
     cancelado();
 
-    const notaAudio = `Audio de ${formatearDuracion(audio.duracion)}`;
-    progreso('Transcribiendo', 0, notaAudio);
+    fase = 'modelo';
+    if (motor.info?.().modelo !== modelo) progreso(etapaModelo, ultimoModelo.fraccion, notaModelo(ultimoModelo));
+    await preparado;
+    cancelado();
+
+    fase = 'transcripcion';
+    const desde = registro?.siguiente || 0;
+    const inicio = Date.now();
+    let fraccionInicial = null;
+    if (mostrar && registro?.textos?.length) mostrarParcial(registro.textos.join(' '));
     const resultado = await motor.transcribir(
       { ...audio, archivo: blob, nombre },
       {
         idioma: ajustes.idioma || null,
-        signal: controlador.signal,
-        onProgreso: ({ fraccion }) => progreso('Transcribiendo', fraccion, notaAudio),
-        onFallaGPU: () => {
-          ajustes = guardarAjustes({ aceleracion: 'wasm' });
-          avisar('La placa de video falló. Sigo con el procesador (más lento) y lo recuerdo para la próxima.', 6000);
+        signal,
+        desde,
+        textosPrevios: registro?.textos || [],
+        onProgreso: (dato) => {
+          fraccionInicial ??= dato.fraccion;
+          progreso('Transcribiendo', dato.fraccion, notaDeTranscripcion(audio.duracion, dato, inicio, fraccionInicial));
         },
         onParcial: (texto) => {
-          if (mostrar) $('texto-resultado').value = texto;
+          if (mostrar) mostrarParcial(texto);
+        },
+        onPedazo: async ({ siguiente, total, textos }) => {
+          if (!registro) return;
+          registro = { ...registro, siguiente, total, textos };
+          await guardarTrabajo(registro).catch(() => {});
         },
       },
     );
@@ -186,9 +259,10 @@ async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, m
       origen,
       duracion: audio.duracion,
       motor: motor.id,
-      modelo: ajustes.modelo,
+      modelo,
       drive: datosDrive,
     });
+    await borrarTrabajo(registro?.id).catch(() => {});
 
     if (datosDrive && ajustes.autoGuardarDrive) {
       try {
@@ -203,12 +277,17 @@ async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, m
 
     if (mostrar) mostrarResultado(entrada);
     return entrada;
+  } catch (error) {
+    // Un error (o cancelar) descarta el trabajo guardado: solo se retoma si la app se cerró de golpe.
+    await borrarTrabajo(registro?.id ?? trabajo?.registroId).catch(() => {});
+    throw error;
   } finally {
     trabajo = null;
     pantallaEncendida?.release().catch(() => {});
     pantallaEncendida = null;
     $('panel-progreso').hidden = true;
     pintarTrabajoGlobal();
+    pintarRetomar();
   }
 }
 
@@ -230,6 +309,7 @@ function mostrarResultado(entrada) {
   if (entrada.guardadoEnDrive) partes.push('guardado en Drive');
   $('trabajo-detalle').textContent = partes.filter(Boolean).join(', ');
   $('texto-resultado').value = entrada.texto || '';
+  $('texto-resultado').scrollTop = 0;
   $('texto-resultado').readOnly = false;
   if (!entrada.texto) $('texto-resultado').placeholder = 'No se detectó voz en este audio.';
   $('acciones-resultado').hidden = false;
@@ -239,13 +319,13 @@ function mostrarResultado(entrada) {
 
 function mensajeAmigable(error) {
   const mensaje = error?.message || String(error);
-  if (/OrtRun|WebGPU|GPUBuffer|device.*lost|onnxruntime/i.test(mensaje)) {
-    return 'El motor de transcripción falló en este dispositivo. Probá de nuevo; si se repite, en Ajustes elegí "Aceleración: solo procesador".';
+  if (/memory|memoria|allocation|OOM/i.test(mensaje)) {
+    return 'El dispositivo se quedó sin memoria. Cerrá otras apps y probá de nuevo, o usá el modelo Rápido (Ajustes).';
   }
-  if (/memory|memoria|allocation/i.test(mensaje)) {
-    return 'El dispositivo se quedó sin memoria. Probá con el modelo Rápido o cerrá otras apps.';
+  if (/OrtRun|onnxruntime|session/i.test(mensaje)) {
+    return 'El motor de transcripción falló. Probá de nuevo; si se repite, en Ajustes tocá "Borrar modelos descargados".';
   }
-  return mensaje.length > 220 ? `${mensaje.slice(0, 220)}…` : mensaje;
+  return mensaje.length > 260 ? `${mensaje.slice(0, 260)}…` : mensaje;
 }
 
 function mostrarError(error) {
@@ -291,7 +371,7 @@ $('boton-guardar-drive').addEventListener('click', async (evento) => {
   const boton = evento.currentTarget;
   boton.disabled = true;
   try {
-    if (!drive.estaConectado()) await drive.conectar(ajustes.clientId);
+    if (!asegurarConexion({ tipo: 'guardar', id: actual.id, texto: $('texto-resultado').value })) return;
     await drive.guardarTxt(actual.drive.carpetaId, nombreTxt(actual.nombre), $('texto-resultado').value);
     actual = { ...actual, texto: $('texto-resultado').value, guardadoEnDrive: true };
     await actualizarEnHistorial(actual);
@@ -341,10 +421,57 @@ async function pintarEstadoMotor() {
     return;
   }
   const descargados = (await motor.modelosDescargados?.()) || {};
-  $('estado-motor').textContent = descargados[ajustes.modelo]
-    ? `Modelo ${modelo.nombre}: ya descargado, funciona sin internet.`
-    : `Modelo ${modelo.nombre}: se descarga en la primera transcripción. ${modelo.descripcion}`;
+  const info = motor.info?.() || {};
+  let estado;
+  if (!descargados[ajustes.modelo]) estado = `se descarga en la primera transcripción. ${modelo.descripcion}`;
+  else if (info.modelo === ajustes.modelo) estado = 'listo para transcribir.';
+  else if (info.cargando) estado = 'cargando en segundo plano…';
+  else estado = 'descargado, funciona sin internet.';
+  $('estado-motor').textContent = `Modelo ${modelo.nombre}: ${estado}`;
 }
+
+/** Deja el modelo cargado en memoria apenas se abre la app, así la transcripción arranca antes. */
+async function precargarModelo() {
+  const motor = obtenerMotor(ajustes.motor);
+  if (!motor.precargar || trabajo) return;
+  const espera = motor.precargar(ajustes.modelo);
+  pintarEstadoMotor();
+  await espera;
+  if (location.hash.slice(1) === 'inicio' || !location.hash) pintarEstadoMotor();
+}
+
+/* === Transcripciones sin terminar === */
+
+// Si el celular cerró la app a mitad de una transcripción, se ofrece seguir desde donde quedó.
+async function pintarRetomar() {
+  const tarjeta = $('tarjeta-retomar');
+  if (trabajo) {
+    tarjeta.hidden = true;
+    return;
+  }
+  const enCurso = (await listarTrabajos().catch(() => [])).find((t) => t.estado === 'en-curso');
+  tarjeta.hidden = !enCurso;
+  if (!enCurso) return;
+  tarjeta.dataset.id = enCurso.id;
+  const avance = enCurso.total ? `, iba por el ${Math.round((enCurso.siguiente / enCurso.total) * 100)}%` : '';
+  $('retomar-texto').textContent = `"${enCurso.nombre}" quedó sin terminar${avance}.`;
+}
+
+async function retomarTrabajo(id) {
+  const guardado = (await listarTrabajos()).find((t) => t.id === id);
+  if (!guardado) return;
+  try {
+    await transcribir({ guardado, nombre: guardado.nombre, origen: guardado.origen, drive: guardado.drive || null });
+  } catch (error) {
+    mostrarError(error);
+  }
+}
+
+$('retomar-continuar').addEventListener('click', () => retomarTrabajo(Number($('tarjeta-retomar').dataset.id)));
+$('retomar-descartar').addEventListener('click', async () => {
+  await borrarTrabajo(Number($('tarjeta-retomar').dataset.id));
+  pintarRetomar();
+});
 
 $('boton-leer-drive').addEventListener('click', () => {
   ir('drive');
@@ -375,7 +502,6 @@ function pintarVistaDrive() {
   $('boton-listar').disabled = sinCarpetas || colaActiva;
   $('auto-guardar').checked = ajustes.autoGuardarDrive;
   pintarConexion();
-  if (ajustes.clientId) drive.cargarGoogle().catch(() => {});
   if (elegida && carpetaListada !== elegida.carpetaId) {
     archivosDrive = [];
     carpetaListada = null;
@@ -443,10 +569,15 @@ function pintarListaDrive() {
   $('boton-pendientes').disabled = !pendientes || colaActiva;
 }
 
-async function asegurarConexion() {
-  if (drive.estaConectado()) return;
-  await drive.conectar(ajustes.clientId);
-  pintarConexion();
+/**
+ * Si no hay permiso de Google, lleva a la página de Google y vuelve; "accion" dice qué
+ * hacer al volver. Devuelve true si ya hay permiso y se puede seguir.
+ */
+function asegurarConexion(accion) {
+  if (drive.estaConectado()) return true;
+  if (trabajo) throw new Error('Esperá a que termine la transcripción en curso para conectar con Google.');
+  drive.conectar(ajustes.clientId, accion);
+  return false;
 }
 
 async function leerDrive() {
@@ -461,7 +592,7 @@ async function leerDrive() {
   }
   $('boton-listar').disabled = true;
   try {
-    await asegurarConexion();
+    if (!asegurarConexion({ tipo: 'leer' })) return;
     $('lista-drive').innerHTML = '<li class="suave">Leyendo la carpeta…</li>';
     const [audios, historial] = await Promise.all([drive.listarAudios(carpeta.carpetaId), listarHistorial()]);
     const enHistorial = new Set(historial.filter((h) => h.drive).map((h) => h.drive.archivoId));
@@ -505,7 +636,7 @@ $('lista-drive').addEventListener('click', async (evento) => {
   if (!boton) return;
   const archivo = archivosDrive[Number(boton.dataset.indice)];
   try {
-    await asegurarConexion();
+    if (!asegurarConexion({ tipo: 'leer' })) return;
     await transcribirDeDrive(archivo, { mostrar: true });
   } catch (error) {
     mostrarError(error);
@@ -516,7 +647,7 @@ $('boton-pendientes').addEventListener('click', async () => {
   const pendientes = archivosDrive.filter((a) => a.estado === 'pendiente' || a.estado === 'error');
   if (!pendientes.length || colaActiva) return;
   try {
-    await asegurarConexion();
+    if (!asegurarConexion({ tipo: 'leer' })) return;
   } catch (error) {
     avisar(error.message, 6000);
     return;
@@ -554,10 +685,9 @@ $('drive-cancelar').addEventListener('click', () => {
 
 $('boton-listar').addEventListener('click', leerDrive);
 
-$('boton-conectar').addEventListener('click', async () => {
+$('boton-conectar').addEventListener('click', () => {
   try {
-    await asegurarConexion();
-    avisar('Conectado a Google.');
+    if (asegurarConexion({ tipo: 'leer' })) avisar('Ya estás conectado a Google.');
   } catch (error) {
     avisar(error.message, 6000);
   }
@@ -649,7 +779,6 @@ function pintarAjustes() {
     .join('');
   $('ajuste-motor').value = obtenerMotor(ajustes.motor).id;
   $('ajuste-idioma').value = ajustes.idioma;
-  $('ajuste-aceleracion').value = ajustes.aceleracion;
   $('ajuste-client-id').value = ajustes.clientId;
   pintarModelos();
   pintarInfoDispositivo();
@@ -673,9 +802,12 @@ async function pintarModelos() {
 async function pintarInfoDispositivo() {
   $('version-app').textContent = `Versión ${versionActual()}`;
   const partes = [];
-  partes.push(navigator.gpu ? 'Este navegador tiene WebGPU (usa la placa de video, más rápido).' : 'Sin WebGPU: se usa el procesador (más lento).');
-  const info = obtenerMotor(ajustes.motor).info?.();
-  if (info?.dispositivo) partes.push(`Última carga del modelo: ${info.dispositivo === 'webgpu' ? 'WebGPU' : 'WebAssembly'}.`);
+  const nucleos = self.crossOriginIsolated ? Math.min(4, Math.max(1, (navigator.hardwareConcurrency || 2) - 1)) : 1;
+  partes.push(
+    self.crossOriginIsolated
+      ? `Transcribe usando ${nucleos} núcleos del procesador.`
+      : 'Transcribe usando 1 núcleo (cerrá y volvé a abrir la app para que use más).',
+  );
   try {
     const { usage, quota } = await navigator.storage.estimate();
     partes.push(`Espacio usado por la app: ${formatearTamano(usage)} de ${formatearTamano(quota)} disponibles.`);
@@ -777,11 +909,9 @@ $('ajuste-motor').addEventListener('change', (evento) => {
 });
 
 $('opciones-modelo').addEventListener('change', (evento) => {
-  if (evento.target.name === 'modelo') ajustes = guardarAjustes({ modelo: evento.target.value });
-});
-
-$('ajuste-aceleracion').addEventListener('change', (evento) => {
-  ajustes = guardarAjustes({ aceleracion: evento.target.value });
+  if (evento.target.name !== 'modelo') return;
+  ajustes = guardarAjustes({ modelo: evento.target.value });
+  precargarModelo();
 });
 
 $('ajuste-idioma').addEventListener('change', (evento) => {
@@ -823,23 +953,78 @@ $('boton-borrar-modelos').addEventListener('click', async () => {
 
 /* === Arranque === */
 
-async function revisarCompartidos(llegoCompartido) {
+// Audios compartidos desde WhatsApp: se guardan como trabajos pendientes (así no se
+// pierden si la app se cierra) y se transcriben uno detrás de otro.
+async function recibirCompartidos(llegoCompartido) {
   let compartidos = [];
   try {
     compartidos = await tomarCompartidos();
   } catch (error) {
     console.error(error);
   }
-  if (llegoCompartido) history.replaceState(null, '', location.pathname + location.hash);
+  if (llegoCompartido) history.replaceState(null, '', `${location.pathname}#inicio`);
   for (const c of compartidos) {
-    const archivo = new File([c.archivo], c.nombre, { type: c.tipo || c.archivo.type });
-    await transcribirArchivo(archivo, 'compartido');
+    try {
+      await guardarTrabajo({ nombre: c.nombre, origen: 'compartido', archivo: c.archivo, estado: 'pendiente', siguiente: 0, textos: [], creado: c.fecha || Date.now() });
+    } catch (error) {
+      console.warn('No se pudo guardar el audio compartido, lo transcribo directo', error);
+      await transcribirArchivo(new File([c.archivo], c.nombre, { type: c.tipo || c.archivo.type }), 'compartido');
+    }
   }
-  if (!compartidos.length && llegoCompartido) avisar('No llegó ningún audio. Probá compartirlo de nuevo.');
+  if (!compartidos.length && llegoCompartido) avisar('No llegó ningún audio. Probá compartirlo de nuevo.', 5000);
 }
+
+async function procesarPendientes() {
+  while (!trabajo) {
+    const siguiente = (await listarTrabajos().catch(() => [])).find((t) => t.estado === 'pendiente');
+    if (!siguiente) break;
+    try {
+      await transcribir({ guardado: siguiente, nombre: siguiente.nombre, origen: siguiente.origen, drive: siguiente.drive || null });
+    } catch (error) {
+      mostrarError(error);
+    }
+  }
+}
+
+// Al volver de la página de Google: guardar el permiso y seguir con lo que se estaba haciendo.
+async function procesarVueltaDeGoogle() {
+  const retorno = drive.procesarRetornoDeGoogle();
+  if (!retorno) return;
+  if (retorno.error) {
+    ir('drive');
+    avisar(retorno.error, 8000);
+    return;
+  }
+  const accion = retorno.accion || { tipo: 'leer' };
+  if (accion.tipo === 'guardar') {
+    const entrada = (await listarHistorial()).find((h) => h.id === accion.id);
+    if (entrada) {
+      mostrarResultado({ ...entrada, texto: accion.texto ?? entrada.texto });
+      ir('transcripcion');
+      $('boton-guardar-drive').click();
+      return;
+    }
+  }
+  ir('drive');
+  leerDrive();
+}
+
+// El script de index.html lo consulta antes de recargar la página.
+Object.defineProperty(window, 'transcriptorOcupado', { get: () => Boolean(trabajo) || colaActiva });
 
 iniciarActualizaciones({ puedeActualizar: () => !trabajo && !colaActiva, avisar });
 
 const compartido = location.search.includes('compartido');
-mostrarVista(compartido ? 'inicio' : location.hash.slice(1));
-revisarCompartidos(compartido);
+const volvioDeGoogle = /(^|[#&])(access_token|error)=/.test(location.hash);
+if (!volvioDeGoogle) mostrarVista(compartido ? 'inicio' : location.hash.slice(1));
+
+(async () => {
+  if (volvioDeGoogle) await procesarVueltaDeGoogle();
+  await recibirCompartidos(compartido);
+  await pintarRetomar();
+  // Libera espacio de archivos de modelos que esta versión ya no usa.
+  obtenerMotor(ajustes.motor).limpiarArchivosViejos?.().catch(() => {});
+  const hayPendientes = (await listarTrabajos().catch(() => [])).some((t) => t.estado === 'pendiente');
+  if (hayPendientes) await procesarPendientes();
+  else setTimeout(precargarModelo, 600);
+})();

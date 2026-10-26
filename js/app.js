@@ -40,6 +40,7 @@ function mostrarVista(nombre) {
   if (vista === 'historial') pintarHistorial();
   if (vista === 'ajustes') pintarAjustes();
   if (vista === 'inicio') pintarEstadoMotor();
+  pintarTrabajoGlobal();
   window.scrollTo(0, 0);
 }
 
@@ -81,7 +82,30 @@ function progreso(etapa, fraccion, nota = '') {
   $('progreso-porcentaje').textContent = porcentaje;
   $('drive-progreso-porcentaje').textContent = porcentaje;
   $('progreso-nota').textContent = nota;
+  pintarTrabajoGlobal();
 }
+
+// Barra fija que muestra la transcripción en curso desde cualquier pantalla.
+function pintarTrabajoGlobal() {
+  const vista = location.hash.slice(1);
+  const visible = Boolean(trabajo) && vista !== (trabajo.mostrar ? 'transcripcion' : 'drive');
+  $('trabajo-global').hidden = !visible;
+  if (!visible) return;
+  const { etapa, fraccion, nombre, etiquetaCola } = trabajo;
+  $('global-etapa').textContent = `${etapa}${fraccion == null ? '' : ` ${Math.round(fraccion * 100)}%`}`;
+  $('global-nombre').textContent = etiquetaCola ? `${etiquetaCola}: ${nombre}` : nombre;
+  $('global-barra').style.width = fraccion == null ? '' : `${Math.round(fraccion * 100)}%`;
+  $('global-barra').parentElement.classList.toggle('indeterminada', fraccion == null);
+}
+
+$('global-ver').addEventListener('click', () => {
+  if (trabajo) ir(trabajo.mostrar ? 'transcripcion' : 'drive');
+});
+$('global-cancelar').addEventListener('click', () => {
+  if (!trabajo) return;
+  if (!trabajo.mostrar) colaCancelada = true;
+  trabajo.controlador.abort();
+});
 
 let pantallaEncendida = null;
 async function mantenerPantallaEncendida() {
@@ -101,9 +125,9 @@ document.addEventListener('visibilitychange', () => {
  *           drive?: { archivoId: string, carpetaId: string }, mostrar?: boolean, etiquetaCola?: string }} pedido
  */
 async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, mostrar = true, etiquetaCola = '' }) {
-  if (trabajo) throw new Error('Ya hay una transcripción en curso. Esperá a que termine.');
+  if (trabajo) throw new Error('Ya hay una transcripción en curso. Mirá su avance en la barra de arriba o cancelala ahí.');
   const controlador = new AbortController();
-  trabajo = { nombre, controlador, etiquetaCola };
+  trabajo = { nombre, controlador, etiquetaCola, mostrar, etapa: 'Preparando', fraccion: null };
   const cancelado = () => {
     if (controlador.signal.aborted) throw new DOMException('Cancelado', 'AbortError');
   };
@@ -131,6 +155,7 @@ async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, m
     await motor.preparar({
       modelo: ajustes.modelo,
       aceleracion: ajustes.aceleracion,
+      signal: controlador.signal,
       onProgreso: ({ fraccion, cargado, total }) =>
         progreso(etapaModelo, fraccion, total ? `${formatearTamano(cargado)} de ${formatearTamano(total)}` : ''),
     });
@@ -183,6 +208,7 @@ async function transcribir({ fuente, nombre, origen, drive: datosDrive = null, m
     pantallaEncendida?.release().catch(() => {});
     pantallaEncendida = null;
     $('panel-progreso').hidden = true;
+    pintarTrabajoGlobal();
   }
 }
 

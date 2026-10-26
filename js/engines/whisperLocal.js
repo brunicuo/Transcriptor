@@ -69,7 +69,16 @@ function pedir(tipo, datos, { onProgreso, transferir = [] } = {}) {
   });
 }
 
-async function preparar({ modelo = 'base', aceleracion = 'auto', onProgreso } = {}) {
+async function preparar({ modelo = 'base', aceleracion = 'auto', onProgreso, signal } = {}) {
+  const soltar = cortarAlCancelar(signal);
+  try {
+    await cargarModelo({ modelo, aceleracion, onProgreso });
+  } finally {
+    soltar();
+  }
+}
+
+async function cargarModelo({ modelo, aceleracion, onProgreso }) {
   const elegido = MODELOS[modelo] ? modelo : 'base';
   const clave = `${elegido}|${aceleracion}`;
   if (modeloCargado === clave) return;
@@ -103,12 +112,22 @@ async function preparar({ modelo = 'base', aceleracion = 'auto', onProgreso } = 
 }
 
 /** Descarta el worker (por ejemplo, si la placa de video se colgó) para empezar de cero. */
-function reiniciarWorker() {
+function reiniciarWorker(motivo = new Error('Se reinició el motor.')) {
   worker?.terminate();
   worker = null;
   modeloCargado = null;
-  for (const pedido of pendientes.values()) pedido.reject(new Error('Se reinició el motor.'));
+  cargando = null;
+  for (const pedido of pendientes.values()) pedido.reject(motivo);
   pendientes.clear();
+}
+
+/** Cancelar corta en el acto, aunque el motor esté en medio de un cálculo largo o trabado. */
+function cortarAlCancelar(signal) {
+  if (!signal) return () => {};
+  if (signal.aborted) throw new DOMException('Cancelado', 'AbortError');
+  const cortar = () => reiniciarWorker(new DOMException('Cancelado', 'AbortError'));
+  signal.addEventListener('abort', cortar, { once: true });
+  return () => signal.removeEventListener('abort', cortar);
 }
 
 function dividirAudio(muestras) {
@@ -150,6 +169,15 @@ function limpiar(texto) {
 
 async function transcribir(audio, { idioma = 'spanish', onProgreso, onParcial, onFallaGPU, signal } = {}) {
   if (!modeloCargado) throw new Error('El modelo no está cargado.');
+  const soltar = cortarAlCancelar(signal);
+  try {
+    return await transcribirPedazos(audio, { idioma, onProgreso, onParcial, onFallaGPU, signal });
+  } finally {
+    soltar();
+  }
+}
+
+async function transcribirPedazos(audio, { idioma, onProgreso, onParcial, onFallaGPU, signal }) {
   const pedazos = dividirAudio(audio.muestras);
   const textos = [];
   const segmentos = [];
@@ -167,13 +195,13 @@ async function transcribir(audio, { idioma = 'spanish', onProgreso, onParcial, o
         const copia = pedazo.slice();
         ({ texto } = await pedir('transcribir', { audio: copia, idioma }, { transferir: [copia.buffer] }));
       } catch (error) {
-        if (dispositivo !== 'webgpu') throw error;
+        if (dispositivo !== 'webgpu' || error.name === 'AbortError') throw error;
         // La placa de video de algunos celulares se cuelga ("device lost"): seguimos con el
         // procesador desde este mismo pedazo, sin perder lo ya transcripto.
         console.warn('Falló WebGPU, sigo con WebAssembly.', error);
         onFallaGPU?.();
         reiniciarWorker();
-        await preparar({ ...ultimaPreparacion, aceleracion: 'wasm' });
+        await cargarModelo({ ...ultimaPreparacion, aceleracion: 'wasm' });
         const copia = pedazo.slice();
         ({ texto } = await pedir('transcribir', { audio: copia, idioma }, { transferir: [copia.buffer] }));
       }

@@ -53,6 +53,16 @@
       <button id="boton-actualizar" class="boton boton-primario boton-chico" type="button">Actualizar</button>
     </div>
 
+    <div id="trabajo-global" class="trabajo-global" role="status" hidden>
+      <div class="trabajo-global-texto">
+        <strong id="global-etapa"></strong>
+        <span id="global-nombre" class="suave chico"></span>
+        <div class="barra"><div id="global-barra" class="barra-relleno"></div></div>
+      </div>
+      <button id="global-ver" class="boton boton-primario boton-chico" type="button">Ver</button>
+      <button id="global-cancelar" class="boton boton-texto boton-chico" type="button">Cancelar</button>
+    </div>
+
     <!-- INICIO -->
     <section id="vista-inicio" class="vista" data-vista="inicio">
       <h1>Transcribí tus audios</h1>
@@ -147,7 +157,7 @@
       <label for="buscar-historial" class="visualmente-oculto">Buscar</label>
       <input id="buscar-historial" class="campo" type="search" placeholder="Buscar en las transcripciones">
       <ul id="lista-historial" class="lista"></ul>
-      <p id="historial-vacio" class="suave" hidden>Todavía no hay transcripciones.</p>
+      <p id="historial-vacio" class="suave" hidden>Todavía no hay transcripciones. Cada una aparece acá cuando termina.</p>
       <button id="boton-borrar-historial" class="boton boton-texto peligro" type="button" hidden>Borrar todo el historial</button>
     </section>
 

@@ -1,0 +1,44 @@
+# Nunca subir audios ni transcripciones al repositorio.
+
+# Audios
+*.ogg
+*.opus
+*.oga
+*.mp3
+*.m4a
+*.aac
+*.wav
+*.flac
+*.wma
+*.amr
+*.3gp
+*.webm
+*.mp4
+*.mkv
+
+# Transcripciones y subtítulos
+*.txt
+*.srt
+*.vtt
+*.docx
+
+# Carpetas de trabajo locales
+audios/
+transcripciones/
+modelos/
+models/
+
+# Sistema y editores
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+
+# Dependencias y temporales
+node_modules/
+_sitio/
+.env
+.env.*

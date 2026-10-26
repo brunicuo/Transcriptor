@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Transcriptor</title>
+  <meta name="description" content="Transcribí audios en español directamente en tu celular o computadora.">
+  <meta name="theme-color" content="#4338ca">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icono.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="encabezado">
+    <div class="marca">
+      <img src="icons/icono.svg" alt="" width="32" height="32">
+      <span>Transcriptor</span>
+    </div>
+    <nav class="navegacion" aria-label="Secciones">
+      <a href="#inicio" data-vista="inicio">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+        <span>Inicio</span>
+      </a>
+      <a href="#drive" data-vista="drive">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2Z"/></svg>
+        <span>Drive</span>
+      </a>
+      <a href="#historial" data-vista="historial">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 2.05 4.95l-1.42 1.42A9 9 0 1 0 13 3Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12Z"/></svg>
+        <span>Historial</span>
+      </a>
+      <a href="#ajustes" data-vista="ajustes">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.84a.5.5 0 0 0-.49.42l-.36 2.54a7 7 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.67 8.48a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.54a.5.5 0 0 0 .49.42h3.84a.5.5 0 0 0 .49-.42l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
+        <span>Ajustes</span>
+      </a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- INICIO -->
+    <section id="vista-inicio" class="vista" data-vista="inicio">
+      <h1>Transcribí tus audios</h1>
+      <p class="suave">Todo se procesa en este dispositivo. Tus audios no se suben a ningún lado.</p>
+
+      <div class="acciones-grandes">
+        <label class="boton boton-primario boton-grande">
+          <input id="entrada-archivo" type="file" accept=".ogg,.opus,.oga,.mp3,.m4a,.aac,.wav,audio/*" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20h14v-2H5v2Zm7-16-5.5 5.5 1.42 1.42L11 7.84V16h2V7.84l3.08 3.08 1.42-1.42L12 4Z"/></svg>
+          Elegir audio
+        </label>
+        <button id="boton-leer-drive" class="boton boton-secundario boton-grande" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2Z"/></svg>
+          Leer Drive
+        </button>
+      </div>
+
+      <div class="tarjeta consejo">
+        <strong>Desde WhatsApp</strong>
+        <p>Mantené apretado un audio, tocá <em>Compartir</em> y elegí <em>Transcriptor</em>. Arranca solo.
+          (Funciona en Android con la app instalada).</p>
+      </div>
+      <p id="estado-motor" class="suave chico"></p>
+    </section>
+
+    <!-- TRANSCRIPCIÓN -->
+    <section id="vista-transcripcion" class="vista" data-vista="transcripcion" hidden>
+      <h1 id="trabajo-nombre" class="nombre-archivo">Transcripción</h1>
+      <p id="trabajo-detalle" class="suave chico"></p>
+
+      <div id="panel-progreso" class="tarjeta progreso" hidden>
+        <div class="progreso-fila">
+          <span id="progreso-etapa">Preparando…</span>
+          <span id="progreso-porcentaje"></span>
+        </div>
+        <div class="barra"><div id="progreso-barra" class="barra-relleno"></div></div>
+        <p id="progreso-nota" class="suave chico"></p>
+        <button id="boton-cancelar" class="boton boton-texto" type="button">Cancelar</button>
+      </div>
+
+      <label for="texto-resultado" class="visualmente-oculto">Texto transcripto</label>
+      <textarea id="texto-resultado" class="resultado" placeholder="Acá va a aparecer el texto." spellcheck="true"></textarea>
+
+      <div id="acciones-resultado" class="acciones-resultado" hidden>
+        <button id="boton-copiar" class="boton boton-primario" type="button">Copiar</button>
+        <button id="boton-descargar" class="boton boton-secundario" type="button">Descargar .txt</button>
+        <button id="boton-guardar-drive" class="boton boton-secundario" type="button" hidden>Guardar en Drive</button>
+      </div>
+      <button id="boton-otro" class="boton boton-texto" type="button" hidden>Transcribir otro audio</button>
+    </section>
+
+    <!-- DRIVE -->
+    <section id="vista-drive" class="vista" data-vista="drive" hidden>
+      <h1>Google Drive</h1>
+
+      <div class="tarjeta">
+        <label for="selector-carpeta" class="etiqueta">Carpeta</label>
+        <select id="selector-carpeta" class="campo"></select>
+        <p id="drive-sin-carpetas" class="suave chico" hidden>
+          Todavía no cargaste ninguna carpeta. <a href="#ajustes">Agregala en Ajustes</a>.
+        </p>
+        <div class="fila-botones">
+          <button id="boton-conectar" class="boton boton-secundario" type="button">Conectar con Google</button>
+          <button id="boton-listar" class="boton boton-primario" type="button">Leer Drive</button>
+        </div>
+        <label class="interruptor">
+          <input id="auto-guardar" type="checkbox">
+          <span>Guardar el .txt en la carpeta de Drive al terminar</span>
+        </label>
+      </div>
+
+      <div id="drive-progreso" class="tarjeta progreso" hidden>
+        <div class="progreso-fila">
+          <span id="drive-progreso-texto"></span>
+          <span id="drive-progreso-porcentaje"></span>
+        </div>
+        <div class="barra"><div id="drive-progreso-barra" class="barra-relleno"></div></div>
+        <button id="drive-cancelar" class="boton boton-texto" type="button">Cancelar</button>
+      </div>
+
+      <div id="drive-resumen" class="resumen" hidden>
+        <span id="drive-contador"></span>
+        <button id="boton-pendientes" class="boton boton-primario" type="button">Transcribir pendientes</button>
+      </div>
+      <ul id="lista-drive" class="lista"></ul>
+    </section>
+
+    <!-- HISTORIAL -->
+    <section id="vista-historial" class="vista" data-vista="historial" hidden>
+      <h1>Historial</h1>
+      <label for="buscar-historial" class="visualmente-oculto">Buscar</label>
+      <input id="buscar-historial" class="campo" type="search" placeholder="Buscar en las transcripciones">
+      <ul id="lista-historial" class="lista"></ul>
+      <p id="historial-vacio" class="suave" hidden>Todavía no hay transcripciones.</p>
+      <button id="boton-borrar-historial" class="boton boton-texto peligro" type="button" hidden>Borrar todo el historial</button>
+    </section>
+
+    <!-- AJUSTES -->
+    <section id="vista-ajustes" class="vista" data-vista="ajustes" hidden>
+      <h1>Ajustes</h1>
+
+      <div class="tarjeta">
+        <h2>Carpetas de Drive</h2>
+        <p class="suave chico">Pegá el link de la carpeta (el que copiás desde Drive con "Compartir" o desde la barra de direcciones).</p>
+        <ul id="lista-carpetas" class="lista lista-compacta"></ul>
+        <form id="form-carpeta" class="formulario">
+          <input type="hidden" id="carpeta-editando">
+          <label for="carpeta-nombre" class="etiqueta">Nombre</label>
+          <input id="carpeta-nombre" class="campo" type="text" placeholder="Por ejemplo: Audios del trabajo" required>
+          <label for="carpeta-link" class="etiqueta">Link de la carpeta</label>
+          <input id="carpeta-link" class="campo" type="url" inputmode="url" placeholder="https://drive.google.com/drive/folders/…" required>
+          <p id="carpeta-id" class="suave chico"></p>
+          <div class="fila-botones">
+            <button id="carpeta-guardar" class="boton boton-primario" type="submit">Agregar carpeta</button>
+            <button id="carpeta-cancelar" class="boton boton-texto" type="button" hidden>Cancelar</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="tarjeta">
+        <h2>Transcripción</h2>
+        <label for="ajuste-motor" class="etiqueta">Motor</label>
+        <select id="ajuste-motor" class="campo"></select>
+        <p id="motor-descripcion" class="suave chico"></p>
+
+        <fieldset class="opciones">
+          <legend class="etiqueta">Modelo</legend>
+          <div id="opciones-modelo"></div>
+        </fieldset>
+
+        <label for="ajuste-idioma" class="etiqueta">Idioma de los audios</label>
+        <select id="ajuste-idioma" class="campo">
+          <option value="spanish">Español</option>
+          <option value="english">Inglés</option>
+          <option value="portuguese">Portugués</option>
+          <option value="italian">Italiano</option>
+          <option value="">Detectar automáticamente</option>
+        </select>
+      </div>
+
+      <div class="tarjeta">
+        <h2>Cuenta de Google</h2>
+        <label for="ajuste-client-id" class="etiqueta">ID de cliente de Google (OAuth)</label>
+        <input id="ajuste-client-id" class="campo" type="text" autocomplete="off" spellcheck="false" placeholder="123456789-abc.apps.googleusercontent.com">
+        <p class="suave chico">Se obtiene en Google Cloud. El README explica cómo, paso a paso.</p>
+        <button id="boton-desconectar" class="boton boton-texto" type="button">Cerrar sesión de Google</button>
+      </div>
+
+      <div class="tarjeta">
+        <h2>Este dispositivo</h2>
+        <p id="info-dispositivo" class="suave chico"></p>
+        <button id="boton-borrar-modelos" class="boton boton-texto peligro" type="button">Borrar modelos descargados</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="aviso" class="aviso" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
